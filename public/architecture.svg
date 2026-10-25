@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="1170" viewBox="0 0 1400 1170" role="img" aria-labelledby="title desc">
+<title id="title">AuthenTra corrected system architecture</title><desc id="desc">Authenticated roles connect to FastAPI. Trusted checks use certificate ID lookup, revocation, issuer approval and exact SHA-256 file comparison. OCR and Random Forest remain advisory. Personal data is kept off-chain.</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#527c78"/></marker></defs>
+<rect width="1400" height="1170" fill="#f5f8f7"/>
+<style>text{font-family:Arial,sans-serif;fill:#234b49}.title{font-size:34px;font-weight:700;letter-spacing:-1px}.sub{font-size:15px;fill:#748d89}.heading{font-size:18px;font-weight:700}.body{font-size:14px;fill:#5c7a75}.tiny{font-size:12px;fill:#78928c}.label{font-size:11px;font-weight:700;letter-spacing:1.5px;fill:#348b70}.arrow{fill:none;stroke:#527c78;stroke-width:2;marker-end:url(#arrow)}.dashed{stroke-dasharray:6 5}</style>
+<text x="45" y="55" class="title">AuthenTra</text>
+<text x="45" y="85" class="sub">AI assisted Digital Certificate Authenticity Verification using Blockchain</text>
+<text x="45" y="116" class="label">CORRECTED ARCHITECTURE  /  RESEARCH PROTOTYPE</text>
+<rect x="45" y="145" width="400" height="105" rx="12" fill="#fff" stroke="#d9e6df"/>
+<rect x="46" y="146" width="398" height="42" rx="11" fill="#edf5ef" stroke="#edf5ef"/>
+<text x="63" y="173" class="heading">Verifier</text>
+<text x="63" y="212" class="body">Sign in • Upload original file • View evidence</text>
+<rect x="500" y="145" width="400" height="105" rx="12" fill="#fff" stroke="#d9e6df"/>
+<rect x="501" y="146" width="398" height="42" rx="11" fill="#edf5ef" stroke="#edf5ef"/>
+<text x="518" y="173" class="heading">Approved institution</text>
+<text x="518" y="212" class="body">Sign in • Register in bulk • Revoke own records</text>
+<rect x="955" y="145" width="400" height="105" rx="12" fill="#fff" stroke="#d9e6df"/>
+<rect x="956" y="146" width="398" height="42" rx="11" fill="#edf5ef" stroke="#edf5ef"/>
+<text x="973" y="173" class="heading">Platform owner</text>
+<text x="973" y="212" class="body">Verify institution identity • Approve / disable issuers</text>
+<path d="M 245 250 V 277" class="arrow"/>
+<path d="M 700 250 V 277" class="arrow"/>
+<path d="M 1155 250 V 277" class="arrow"/>
+<rect x="45" y="278" width="1310" height="82" rx="12" fill="#244b48" stroke="#244b48"/>
+<text x="68" y="308" class="heading" style="fill:#fff">React interface → FastAPI authenticated API</text>
+<text x="68" y="336" class="body" style="fill:#c4ddd3">JWT in HttpOnly cookie • Server-assigned roles • File type / size limits • Protected registration and revocation endpoints</text>
+<path d="M 230 360 V 395" class="arrow"/>
+<path d="M 700 360 V 395" class="arrow"/>
+<path d="M 1175 360 V 395" class="arrow"/>
+<rect x="45" y="398" width="365" height="302" rx="12" fill="#fff" stroke="#d9e6df"/>
+<rect x="46" y="399" width="363" height="42" rx="11" fill="#edf5ef" stroke="#edf5ef"/>
+<text x="63" y="426" class="heading">01  Institution registration</text>
+<text x="63" y="465" class="body">1. Validate original PDF / PNG / JPEG</text>
+<text x="63" y="488" class="body">2. Confirm a unique certificate ID</text>
+<text x="63" y="511" class="body">3. SHA-256 of original uploaded bytes</text>
+<text x="63" y="534" class="body">4. Authorized institution signs transaction</text>
+<text x="63" y="557" class="body">5. Smart contract checks issuer permission</text>
+<text x="63" y="580" class="body">6. Confirm transaction before success</text>
+<text x="63" y="603" class="body">Bulk: per-file results, throughput and failures</text>
+<text x="63" y="626" class="body">Revocation: issuer of record or platform owner</text>
+<rect x="435" y="398" width="495" height="402" rx="12" fill="#fff" stroke="#d9e6df"/>
+<rect x="436" y="399" width="493" height="42" rx="11" fill="#edf5ef" stroke="#edf5ef"/>
+<text x="453" y="426" class="heading">02  Trusted certificate verification</text>
+<text x="453" y="465" class="body">1. Validate the original uploaded file</text>
+<text x="453" y="488" class="body">2. Compute SHA-256 of exact file bytes</text>
+<text x="453" y="511" class="body">3. Resolve ID: user entry or extracted text</text>
+<text x="453" y="534" class="body">    Missing / invalid ID → Inconclusive</text>
+<text x="453" y="557" class="body">4. Look up the record using the ID digest</text>
+<text x="453" y="580" class="body">    Absent record → Not Registered</text>
+<text x="453" y="603" class="body">5. Check revocation → Revoked if withdrawn</text>
+<text x="453" y="626" class="body">6. Check issuer approval → Not Verified if disabled</text>
+<text x="453" y="649" class="body">7. Compare hashes → Possible Tampering if different</text>
+<text x="453" y="672" class="body">8. All checks pass → Verified (Registered and Unchanged)</text>
+<text x="453" y="695" class="body">Invalid file / chain failure → Unable to Authenticate</text>
+<text x="453" y="718" class="body">Return each check independently with the final result</text>
+<rect x="955" y="398" width="400" height="302" rx="12" fill="#fff" stroke="#d9e6df"/>
+<rect x="956" y="399" width="398" height="42" rx="11" fill="#eeeff8" stroke="#eeeff8"/>
+<text x="973" y="426" class="heading">03  Separate advisory analysis</text>
+<text x="973" y="465" class="body">PDF embedded text or Tesseract OCR</text>
+<text x="973" y="488" class="body">Extract ID, recipient, course and issue date</text>
+<text x="973" y="511" class="body">Validate fields and construct text features</text>
+<text x="973" y="534" class="body">Experimental Random Forest model</text>
+<text x="973" y="557" class="body">Output: anomaly / no major anomaly / unavailable</text>
+<text x="973" y="580" class="body">Synthetic training data; held-out template groups</text>
+<text x="973" y="603" class="body">AI never overrides the trusted verification result</text>
+<text x="973" y="626" class="body">Extracted personal fields are not saved in history</text>
+<path d="M 955 730 H 932" class="arrow dashed"/>
+<text x="963" y="724" class="tiny">OCR supplies a candidate ID.</text>
+<text x="963" y="746" class="tiny">Allow manual correction; never treat OCR as proof.</text>
+<rect x="45" y="730" width="365" height="70" rx="12" fill="#eef5f0" stroke="#d9e6df"/>
+<text x="63" y="757" class="label">PRIVACY BY DESIGN</text>
+<text x="63" y="780" class="tiny">Temporary uploads removed, including on failure.</text>
+<path d="M 230 700 V 714 H 26 V 862 H 65" class="arrow"/>
+<path d="M 670 800 V 862 H 635" class="arrow"/>
+<rect x="65" y="826" width="570" height="160" rx="12" fill="#fff" stroke="#d9e6df"/>
+<rect x="66" y="827" width="568" height="42" rx="11" fill="#edf5ef" stroke="#edf5ef"/>
+<text x="83" y="854" class="heading">Ethereum / Solidity registry</text>
+<text x="83" y="893" class="body">SHA-256 reference digest • SHA-256 file hash</text>
+<text x="83" y="916" class="body">Issuer address • Registration timestamp • Revoked flag</text>
+<text x="83" y="939" class="body">Owner-controlled approved-issuer mapping</text>
+<text x="83" y="962" class="body">No names, grades, full certificate files or passwords</text>
+<path d="M 1330 700 V 815" class="arrow dashed"/>
+<rect x="715" y="826" width="640" height="160" rx="12" fill="#fff" stroke="#d9e6df"/>
+<rect x="716" y="827" width="638" height="42" rx="11" fill="#edf5ef" stroke="#edf5ef"/>
+<text x="733" y="854" class="heading">Off-chain operational storage</text>
+<text x="733" y="893" class="body">SQLite: users, password hashes, roles, institution wallets</text>
+<text x="733" y="916" class="body">Registration index, verification history and action audit log</text>
+<text x="733" y="939" class="body">Signer keys: separate development config / server environment</text>
+<text x="733" y="962" class="body">Full documents: not retained. IPFS: optional future extension</text>
+<rect x="45" y="1016" width="1310" height="116" rx="12" fill="#e8f2eb" stroke="#d5e6da"/>
+<text x="66" y="1046" class="label">06  MEASUREMENT &amp; PROJECT STRENGTHS</text>
+<text x="66" y="1074" class="body">Outcome correctness • Mean / p95 latency • OCR field extraction • ML precision / recall / F1 • Bulk throughput • Gas used</text>
+<text x="66" y="1102" class="tiny">An exact hash match supports file integrity. Approved issuance and revocation checks provide the trust context. AI adds advisory evidence.</text>
+<text x="45" y="1155" class="tiny">Limits: rescanning changes the hash; synthetic AI is not real-world fraud detection; local-chain fees are not public-network cost estimates.</text>
+</svg>
