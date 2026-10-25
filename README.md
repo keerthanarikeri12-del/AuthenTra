@@ -16,7 +16,7 @@ On this Windows machine, start or restart it from the project directory:
 
 The script starts the local blockchain and backend in hidden background processes, prepares missing demonstration data, and prints the application URL. It does not publish a website or use real cryptocurrency. It requires the dependencies described below.
 
-Use the sign-in page's **Verifier**, **Institution** or **Administrator** buttons. For manual login:
+Choose **User Login**, **Institution Login**, or **Administrator**, then enter your credentials. For local demo login:
 
 | Role | Email |
 | --- | --- |
@@ -121,3 +121,22 @@ The evaluation page reads `.local/model-metrics.json` and `.local/system-metrics
 Full certificate uploads are not retained. `.local/chain.json` contains development signing keys and must not be shared. Do not expose the local RPC port or package runtime databases and signing files in a submission.
 
 The local chain uses a JavaScript fallback when its optional native WebSocket module does not match Node.js. This is acceptable for a small demonstration; it can affect performance measurements.
+
+## Separate account experiences
+
+User Login creates ordinary verifier accounts. Institution Login accepts applications with institution name, official email, registration reference, verification information and a nonzero Ethereum wallet address. Official-email ownership and institutional identity are reviewed manually by the administrator; submitting an address does not prove ownership. Applications always start at `PENDING_APPROVAL`. Public registration ignores privileged role/status fields and cannot create administrators.
+
+Existing database roles are retained: `verifier` = USER, `institution` = INSTITUTION_ADMIN, `owner` = SYSTEM_ADMIN. Users land on verification, approved institutions on their certificate registry, and owners on institution review. Navigation uses internal React state; no protected URL grants access. All protected APIs independently validate the cookie JWT (signature, issuer, expiry and subject), reload the database account, and deny institutions whose status is not APPROVED. Certificate issuance also requires on-chain issuer approval. Histories, registrations and institution audit queries are scoped by the authenticated account; SQLite is backend-only and has no RLS facility.
+
+The administrator reviews application details under Institutions, provisions a funded server-side signer in `ISSUER_PRIVATE_KEYS`, and approves the wallet. Approve, reject, suspend and revoke authorization all write the corresponding blockchain approval first, then persist the application status and audit event. A failed chain action leaves the database status unchanged. These two stores do not share a transaction: if the chain succeeds but the database write fails, retry the administrative action to reconcile them. Revoking institutional authorization disables issuance; individual certificate revocation remains a separate permanent operation. Existing sessions are denied on their next protected request after suspension.
+
+`backend/storage.py:initialize` performs an idempotent additive migration on startup, preserving existing accounts and certificate history. Legacy accounts receive APPROVED application eligibility for compatibility, while the existing on-chain issuer check remains authoritative for issuance. New institution accounts default to PENDING_APPROVAL. Back up the SQLite database before upgrading. Existing duplicate wallet addresses (case-insensitive) must be resolved before the unique wallet index can be created.
+
+Copy `.env.example` values into your backend process environment (the server does not automatically load dotenv files). Keep signing keys and JWT_SECRET server-side and use HTTPS outside explicit local demo mode. Existing owners remain the only administrator accounts; there is no public administrator registration. No Supabase or second authentication provider is introduced.
+
+Authentication regression tests, including failed login, portal mismatch, privilege injection, pending approval, suspension of an existing session, administrative transitions, private history and missing/expired JWT claims:
+
+```powershell
+.venv\Scripts\python.exe -m pytest tests -q --tb=short --basetemp=.local/auth-tests
+node node_modules/vite/bin/vite.js build
+```

@@ -53,6 +53,21 @@ def initialize():
         );
         ''')
 
+        # Idempotent upgrade of existing installations; legacy issuers retain
+        # application eligibility, with on-chain approval still mandatory.
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(users)")}
+        for name, definition in {
+            "approval_status": "TEXT NOT NULL DEFAULT 'PENDING_APPROVAL' CHECK(approval_status IN ('PENDING_APPROVAL','APPROVED','REJECTED','SUSPENDED','REVOKED'))",
+            "institution_reference": "TEXT",
+            "verification_info": "TEXT",
+        }.items():
+            if name not in columns:
+                conn.execute(f"ALTER TABLE users ADD COLUMN {name} {definition}")
+                if name == "approval_status":
+                    conn.execute("UPDATE users SET approval_status='APPROVED'")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS users_wallet_unique ON users(lower(wallet)) WHERE wallet IS NOT NULL")
+
+
 def seed_demo(registry):
     # This explicit development mode is never enabled implicitly in production.
     issuers = [a for a in registry.keys if a != registry.owner]
@@ -64,7 +79,7 @@ def seed_demo(registry):
     ]
     with connect() as conn:
         for email, name, role, wallet in accounts:
-            conn.execute("INSERT OR IGNORE INTO users(email,name,password,role,wallet) VALUES(?,?,?,?,?)", (email, name, password_hash("AuthenTra-demo-2026!"), role, wallet))
+            conn.execute("INSERT OR IGNORE INTO users(email,name,password,role,wallet,approval_status) VALUES(?,?,?,?,?,?)", (email, name, password_hash("AuthenTra-demo-2026!"), role, wallet, "PENDING_APPROVAL" if email.startswith("pending@") else "APPROVED"))
 
 def audit(conn, user_id, action, reference=None, transaction_hash=None):
     conn.execute("INSERT INTO audit(user_id,action,reference,transaction_hash) VALUES(?,?,?,?)", (user_id, action, reference, transaction_hash))

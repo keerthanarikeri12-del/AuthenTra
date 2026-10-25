@@ -13,3 +13,5 @@
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}.spin{animation:none}}
 .login-shell{grid-template-columns:minmax(0,46fr) minmax(0,54fr)}.login-form,.login-story{min-width:0}.login-inner{width:min(380px,100%)}
 @media(max-width:680px){.login-shell{grid-template-columns:minmax(0,1fr)}}
+
+.login-choices{display:flex;flex-wrap:wrap;gap:8px;margin:20px 0}.login-choices button{flex:1;font-size:11px;padding:12px 8px}.institution-card>button{margin-top:8px}

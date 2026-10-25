@@ -8,7 +8,7 @@ import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 import jwt
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse
@@ -55,18 +55,26 @@ async def security_headers(request, call_next):
     return response
 
 def public_user(user):
-    return {key: user[key] for key in ["id", "name", "email", "role", "wallet"]}
+    return {key: user[key] for key in ["id", "name", "email", "role", "wallet", "approval_status", "institution_reference", "verification_info"]}
 
 def current_user(request: Request):
     try:
-        payload = jwt.decode(request.cookies.get(COOKIE, ""), JWT_SECRET, algorithms=["HS256"], issuer="authentra")
+        payload = jwt.decode(request.cookies.get(COOKIE, ""), JWT_SECRET, algorithms=["HS256"], issuer="authentra", options={"require": ["exp", "sub", "iss"]})
         with connect() as conn:
             user = conn.execute("SELECT * FROM users WHERE id=?", (int(payload["sub"]),)).fetchone()
         if user is None:
             raise ValueError()
-        return dict(user)
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(401, "Your session expired. Please sign in again.")
     except Exception:
         raise HTTPException(401, "Please sign in to continue.")
+    ensure_active(user)
+    return dict(user)
+
+def ensure_active(user):
+    if user["role"] == "institution" and user["approval_status"] != "APPROVED":
+        messages = {"PENDING_APPROVAL": "Your institution is pending approval. Contact the platform administrator.", "REJECTED": "Your institution application was rejected.", "SUSPENDED": "Your institution account is suspended.", "REVOKED": "Your institution authorization has been revoked."}
+        raise HTTPException(403, messages[user["approval_status"]])
 
 User = Annotated[dict, Depends(current_user)]
 
@@ -94,6 +102,7 @@ def safe_chain_action(action):
 class Credentials(BaseModel):
     email: str = Field(max_length=200)
     password: str = Field(min_length=1, max_length=128)
+    account_type: Literal["user", "institution", "admin"] | None = None
 
 class Signup(Credentials):
     name: str = Field(min_length=2, max_length=100)
@@ -110,6 +119,10 @@ def login(body: Credentials, request: Request, response: Response):
     if not user or not password_matches(body.password, user["password"]):
         LOGIN_ATTEMPTS[key] = attempts + [now]
         raise HTTPException(401, "The email or password is incorrect.")
+    expected = {"user": "verifier", "institution": "institution", "admin": "owner"}
+    if body.account_type and user["role"] != expected[body.account_type]:
+        raise HTTPException(403, "Use the login option for your account type.")
+    ensure_active(user)
     LOGIN_ATTEMPTS.pop(key, None)
     token = jwt.encode({"sub": str(user["id"]), "iss": "authentra", "exp": datetime.now(timezone.utc) + timedelta(hours=4)}, JWT_SECRET, algorithm="HS256")
     response.set_cookie(COOKIE, token, httponly=True, secure=not DEMO, samesite="strict", max_age=14400, path="/")
@@ -117,7 +130,7 @@ def login(body: Credentials, request: Request, response: Response):
 
 @app.post("/api/auth/signup", status_code=201)
 def signup(body: Signup):
-    if len(body.password) < 12 or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", body.email):
+    if len(body.name.strip()) < 2 or len(body.password) < 12 or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", body.email):
         raise HTTPException(422, "Enter a valid email and a password of at least 12 characters.")
     try:
         with connect() as conn:
@@ -294,10 +307,13 @@ def revoke(reference: str, user: User):
     return {"status": "revoked", **transaction}
 
 class Approval(BaseModel):
-    approved: bool
+    approved: bool | None = None
+    status: Literal["APPROVED", "REJECTED", "SUSPENDED", "REVOKED"] | None = None
 
 class Institution(Signup):
-    wallet: str
+    wallet: str = Field(pattern=r"^0x[0-9a-fA-F]{40}$")
+    institution_reference: str = Field(min_length=3, max_length=200)
+    verification_info: str = Field(min_length=10, max_length=2000)
 
 @app.get("/api/institutions")
 def institutions(user: User):
@@ -305,24 +321,29 @@ def institutions(user: User):
     with connect() as conn:
         rows = [public_user(r) for r in conn.execute("SELECT * FROM users WHERE role='institution'")]
     chain = registry()
-    return [{**r, "approved": chain.approved(r["wallet"])} for r in rows]
+    return [{**r, "approved": r["approval_status"] == "APPROVED" and chain.approved(r["wallet"])} for r in rows]
+
+def create_institution(body):
+    from web3 import Web3
+    if not Web3.is_address(body.wallet) or int(body.wallet, 16) == 0 or len(body.password) < 12 or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", body.email.strip()) or len(body.name.strip()) < 2 or len(body.institution_reference.strip()) < 3 or len(body.verification_info.strip()) < 10:
+        raise HTTPException(422, "Provide institution name, official email, registration reference, verification details, a nonzero wallet and a password of at least 12 characters.")
+    wallet = Web3.to_checksum_address(body.wallet)
+    with connect() as conn:
+        try:
+            conn.execute("INSERT INTO users(email,name,password,role,wallet,institution_reference,verification_info,approval_status) VALUES(?,?,?,'institution',?,?,?,'PENDING_APPROVAL')", (body.email.lower().strip(), body.name.strip(), password_hash(body.password), wallet, body.institution_reference.strip(), body.verification_info.strip()))
+            audit(conn, None, "institution_application", wallet)
+        except sqlite3.IntegrityError:
+            raise HTTPException(409, "This email or wallet is already registered.")
+    return {"message": "Application submitted. Your institution is PENDING_APPROVAL. An administrator must verify your details and configure your signer before approval.", "approval_status": "PENDING_APPROVAL"}
+
+@app.post("/api/auth/institution-signup", status_code=201)
+def institution_signup(body: Institution):
+    return create_institution(body)
 
 @app.post("/api/institutions", status_code=201)
 def add_institution(body: Institution, user: User):
     role(user, "owner")
-    from web3 import Web3
-    if not Web3.is_address(body.wallet) or len(body.password) < 12 or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", body.email):
-        raise HTTPException(422, "Provide a valid wallet, email and password of at least 12 characters.")
-    wallet = Web3.to_checksum_address(body.wallet)
-    try:
-        with connect() as conn:
-            if conn.execute("SELECT id FROM users WHERE wallet=?", (wallet,)).fetchone():
-                raise HTTPException(409, "This wallet already belongs to an account.")
-            conn.execute("INSERT INTO users(email,name,password,role,wallet) VALUES(?,?,?,'institution',?)", (body.email.lower().strip(), body.name, password_hash(body.password), wallet))
-            audit(conn, user["id"], "institution_created", wallet)
-    except sqlite3.IntegrityError:
-        raise HTTPException(409, "The email is already registered.")
-    return {"message": "Institution created. Approve its wallet after verifying its identity and configuring its server-side signer."}
+    return create_institution(body)
 
 @app.post("/api/institutions/{institution_id}/approval")
 def approve(institution_id: int, body: Approval, user: User):
@@ -331,10 +352,18 @@ def approve(institution_id: int, body: Approval, user: User):
         institution = conn.execute("SELECT * FROM users WHERE id=? AND role='institution'", (institution_id,)).fetchone()
     if not institution:
         raise HTTPException(404, "Institution not found.")
-    transaction = safe_chain_action(lambda: registry().set_issuer(institution["wallet"], body.approved))
+    status = body.status or ("APPROVED" if body.approved is True else "SUSPENDED" if body.approved is False else None)
+    if status is None:
+        raise HTTPException(422, "Supply an approval status.")
+    chain = registry()
+    approved = status == "APPROVED"
+    if approved and institution["wallet"] not in chain.keys:
+        raise HTTPException(409, "Configure the institution server-side signer before approval.")
+    transaction = safe_chain_action(lambda: chain.set_issuer(institution["wallet"], approved))
     with connect() as conn:
-        audit(conn, user["id"], "issuer_approved" if body.approved else "issuer_disabled", institution["wallet"], transaction["transaction_hash"])
-    return {"approved": body.approved, **transaction}
+        conn.execute("UPDATE users SET approval_status=? WHERE id=?", (status, institution_id))
+        audit(conn, user["id"], "issuer_" + status.lower(), institution["wallet"], transaction["transaction_hash"])
+    return {"approved": approved, "approval_status": status, **transaction}
 
 @app.get("/api/audit")
 def audit_log(user: User):
