@@ -505,6 +505,7 @@ def dashboard(user: User):
             }
 
 @app.get("/api/history")
+@app.get("/api/verifications")
 def history(user: User):
     with connect() as conn:
         return [dict(r) for r in conn.execute("SELECT * FROM verifications WHERE user_id=? ORDER BY id DESC LIMIT 500", (user["id"],))]
