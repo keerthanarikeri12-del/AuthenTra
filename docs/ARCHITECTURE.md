@@ -16,7 +16,7 @@ This corrected architecture implements the six gaps described in the supplied re
 6. **Keep AI findings separate.** The model can raise a warning for a cryptographically verified file, or miss an alteration. Neither result overrides the trusted checks.
 7. **Use accurate result wording.** Verified means “Registered and Unchanged,” with an approved issuer and active record. A mismatch means “Possible Tampering,” with an explanation that re-saving or scanning also changes the hash.
 8. **Handle uncertainty explicitly.** Missing or invalid IDs produce Inconclusive. Invalid documents or blockchain failure produce Unable to Authenticate. An OCR failure can be recovered by supplying the ID manually; the trusted checks must still pass.
-9. **Retain minimal data.** Full certificate files and extracted names, courses and dates are not stored by the application. History records an ID, hash, result, elapsed processing time and advisory status.
+9. **Retain minimal data.** Queued certificate bytes are staged privately in SQLite and cleared after processing. Private batch reports retain outcomes and extracted fields; verification history records an ID, hash, result, elapsed processing time and advisory status. See UPLOADS.md for retention and worker behavior.
 10. **Measure actual behavior.** The application reports processing times, batch results and gas. A separate script measures HTTP verification latency and controlled outcome correctness.
 
 ## Research gaps translated into project strengths
@@ -27,7 +27,7 @@ This corrected architecture implements the six gaps described in the supplied re
 | Altered versus unregistered documents | ID-based record lookup followed by exact SHA-256 comparison | Modified known-ID document → Possible Tampering; unknown ID → Not Registered |
 | No combined AI and cryptographic analysis | Separate OCR/Random Forest advisory panel alongside authoritative checks | An AI warning cannot change Verified into a rejection; AI cannot promote an unregistered file to Verified |
 | Issuer trust and revocation | Platform-owner approval, institution-bound signing, backend checks and Solidity permissions | Contract tests cover unauthorized registration, cross-issuer revocation, disabled issuers and permanent revocation |
-| Privacy and blockchain cost | Digests and lifecycle metadata on-chain; operational records off-chain; temporary-file cleanup | No certificate file, recipient name or grade stored on-chain; no persistent user uploads |
+| Privacy and blockchain cost | Digests and lifecycle metadata on-chain; operational records off-chain; temporary-file cleanup | No certificate file, recipient name or grade stored on-chain; queued bytes cleared after processing |
 | Missing performance evidence | Measured correctness, extraction, latency, bulk throughput, gas and model evaluation | Evaluation page, machine-readable metrics, backend tests and contract tests |
 
 These are advantages over the specific manual or hash-only baselines discussed in the supplied material. To claim novelty relative to existing research, add a cited paper-by-paper comparison. The current implementation does not establish that no existing system provides similar capabilities.
@@ -49,40 +49,45 @@ These are advantages over the specific manual or hash-only baselines discussed i
 
 Tesseract is the OCR engine in this implementation. A local JavaScript worker runs it with packaged English language data; it does not require a separately installed Tesseract executable. This replaces the Python wrapper shown in the initial plan while preserving the intended OCR technology.
 
-## Authoritative decision order
+## Authoritative decision order and result categories
 
-The first applicable rule determines the primary result. Individual checks are also returned so overlapping conditions remain visible.
+The backend evaluates certificate verification in strict order. The first applicable rule determines the primary category:
 
-| Order | Condition | Primary result |
-| --- | --- | --- |
-| 1 | Unsupported, unreadable, encrypted or oversized file | Unable to Authenticate |
-| 2 | No usable certificate ID after manual input / extraction | Inconclusive |
-| 3 | Blockchain read fails or configured contract is unavailable | Unable to Authenticate |
-| 4 | Supplied ID has no registration | Not Registered |
-| 5 | Registered record is revoked | Revoked |
-| 6 | Issuer is not currently approved | Not Verified |
-| 7 | Uploaded SHA-256 differs from registered SHA-256 | Possible Tampering |
-| 8 | Record exists, is active, issuer approved and hash matches | Verified — Registered and Unchanged |
+| Order | Condition | Required Result Category | UI Label & Explanation |
+| --- | --- | --- | --- |
+| 1 | File is corrupt, unsupported, empty, or fails required validation | `INVALID_FILE` | **Invalid File** — File validation failed before processing. |
+| 2 | Blockchain or trusted RPC node cannot be reached | `VERIFICATION_UNAVAILABLE` | **Verification Unavailable** — Honest failure reporting; never guessing or simulating. |
+| 3 | No readable certificate reference detected or provided | `NOT_REGISTERED_OR_INCONCLUSIVE` | **Not Registered or Inconclusive** — Reference required for lookup. |
+| 4 | Supplied reference has no registration on the blockchain | `NOT_REGISTERED_OR_INCONCLUSIVE` | **Not Registered or Inconclusive** — No record found; does not prove tampering. |
+| 5 | Registered on-chain record is marked revoked | `REVOKED` | **Revoked** — Permanently revoked by issuer or administrator. |
+| 6 | Issuing institution wallet is not currently authorized | `ISSUER_NOT_AUTHORIZED` | **Issuer Not Authorized** — Issuer approval revoked or suspended. |
+| 7 | Uploaded original file SHA-256 differs from registered hash | `POSSIBLE_TAMPERING_OR_FILE_MISMATCH` | **Possible Tampering or File Mismatch** — Hash mismatch against trusted record; note that re-exporting or rescanning also alters binary bytes. |
+| 8 | Record exists, is active, issuer approved, and original hash matches | `VERIFIED` | **Verified** — Registered and unchanged; confirmed active on-chain. |
 
-An incorrect or altered ID can still produce Not Registered. That outcome applies to the supplied ID, not to a universal claim that the document was never issued. The verifier should confirm the ID with the institution when uncertain. An ID copied from a valid certificate cannot by itself produce Verified: the original file hash must also match.
+An incorrect or altered ID produces `NOT_REGISTERED_OR_INCONCLUSIVE`. The system never performs an arbitrary blind hash search across all records to conclude tampering. A hash mismatch against an identified trusted record produces `POSSIBLE_TAMPERING_OR_FILE_MISMATCH` without claiming proven deliberate fraud, since re-saving or rescanning alters file bytes. An exact hash match is never accepted if the issuer is unauthorized or the certificate has been revoked.
 
 ## Institution lifecycle
 
 1. The owner checks an institution's identity outside the prototype and creates its account with a dedicated wallet.
 2. The owner approves that wallet through a contract transaction. Account creation alone grants no issuance rights.
 3. The institution uploads original files with unique certificate IDs. The prototype supports multiple PDF/PNG/JPEG files; ZIP archives and CSV manifests are not implemented.
-4. The backend validates file contents and limits, calculates hashes, signs through the institution's configured server-side signer, and waits for transaction confirmation.
-5. Each batch row receives a separate success/failure result. Partial success is explicit, not rolled back or described as a complete success.
-6. An approved institution can revoke its own records. The owner can revoke any record, including one from a disabled issuer. A different institution cannot revoke it.
-7. Revocation is permanent. A corrected certificate requires a new ID. A previously used ID cannot be overwritten or reused.
+4. The backend validates file contents, computes canonical SHA-256 digests from original unmodified bytes, and analyzes fields with PDF text extraction and local Tesseract OCR.
+5. If OCR confidence is low (<50%) or critical fields are ambiguous/missing, the item enters `AWAITING_REVIEW`, prompting the institution administrator to verify or correct fields before on-chain registration.
+6. The backend signs through the institution's verified server-side signer, broadcasts the transaction to the EVM node, and enters `PENDING_BLOCKCHAIN`.
+7. Once the transaction receipt is confirmed, the backend performs an **independent on-chain read-back** (`lookup(reference)`), verifying that the recorded file hash matches the uploaded file hash and the issuer matches the authorized wallet. Only upon read-back verification does the status transition to `REGISTERED_ON_BLOCKCHAIN`. Mock hashes and simulated registrations are strictly forbidden.
+8. Each batch row receives a separate success/failure result. Partial success is explicit, not rolled back or described as a complete success.
+9. An approved institution can revoke its own records. The owner can revoke any record, including one from a disabled issuer. A different institution cannot revoke it.
+10. Revocation is permanent. A corrected certificate requires a new ID. A previously used ID cannot be overwritten or reused.
 
 ## Storage and privacy
 
-**On-chain:** SHA-256 of normalized reference, SHA-256 of file bytes, issuer wallet, registration timestamp, revoked flag, approved-issuer mapping and contract events.
+**On-chain:** Keccak-256 of normalized reference, SHA-256 of original file bytes, issuer wallet, registration timestamp, revoked flag, approved-issuer mapping and contract events. Sensitive recipient names, certificate files, and course information are never put on-chain.
 
-**Off-chain:** password hashes, user identities, roles, institution wallets, registration transaction receipts, verification history and application audit records. Full certificate files are never added to this database.
+**Off-chain:** Password hashes, user identities, roles, institution wallets, registration transaction receipts, block numbers, network identifiers, extracted metadata (recipient, course, issue date, OCR confidence), verification history, and non-sensitive audit records (which omit student names and document text). Full certificate files are never stored in the database.
 
-**Transient:** uploaded bytes and extracted personal fields exist during a request. OCR image files live in a temporary directory and are removed on success or failure. FastAPI upload objects are closed after reading.
+**Upload staging:** A bounded receiver spools request bodies to temporary files before multipart parsing. Valid files are staged in SQLite for the serial background worker. Staged bytes are cleared after each outcome; OCR image files and request spool files are closed on completion or failure. Private job reports retain extracted personal fields. Legacy single-file verification returns these fields directly without persisting them. See [UPLOADS.md](UPLOADS.md).
+
+**Rescanning and Hashing:** SHA-256 is computed strictly over raw binary file bytes. Rescanning or re-exporting a certificate creates different byte sequences (compression, metadata, raster differences), altering the file hash even if the visible text appears identical.
 
 **Not anonymous:** hashes and reference digests are pseudonymous, not a guarantee of anonymity. Predictable IDs can be guessed, and wallet/timing information can be correlated. Public-chain deployment needs a specific privacy review and an ID policy with sufficient entropy.
 

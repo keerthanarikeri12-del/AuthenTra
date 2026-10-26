@@ -32,3 +32,29 @@ def test_fields_and_date_validation():
     assert fields["reference"] == "AT-001"
     assert fields["name"] == "Alex"
     assert fields["date_valid"] is False
+
+@pytest.mark.parametrize('image_format,filename,mime', [('PNG','image.png','image/png'),('JPEG','image.jpg','image/jpeg'),('JPEG','image.jpeg','image/jpeg')])
+def test_readable_images_and_extension_match(image_format, filename, mime):
+    import io
+    from PIL import Image
+    from backend.uploads import validate_file
+    stream=io.BytesIO()
+    Image.new('RGB',(40,40),'white').save(stream,format=image_format)
+    assert validate_file(stream.getvalue(),filename,mime)=='image'
+    with pytest.raises(ValueError,match='extension'):
+        validate_file(stream.getvalue(),'image.pdf','application/pdf')
+
+
+def test_encrypted_and_over_page_limit_pdfs():
+    import io
+    from pypdf import PdfWriter
+    writer=PdfWriter()
+    for _ in range(6):
+        writer.add_blank_page(width=100,height=100)
+    stream=io.BytesIO();writer.write(stream)
+    with pytest.raises(ValueError,match='five pages'):
+        validate_document(stream.getvalue())
+    writer=PdfWriter();writer.add_blank_page(width=100,height=100);writer.encrypt('secret')
+    stream=io.BytesIO();writer.write(stream)
+    with pytest.raises(ValueError,match='Encrypted'):
+        validate_document(stream.getvalue())
