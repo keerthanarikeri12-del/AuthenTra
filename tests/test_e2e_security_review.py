@@ -62,6 +62,7 @@ class MockE2EBlockchainRegistry:
             "0x0000000000000000000000000000000000000005": False,  # Suspended Inst
         }
         self.records = {}
+        self.by_hash = {}
         self.fail_mode = None  # "revert", "offline", "mismatch"
 
     def health(self):
@@ -98,6 +99,11 @@ class MockE2EBlockchainRegistry:
         if self.fail_mode == "offline":
             raise RuntimeError("RPC connection refused: node offline")
         return self.records.get(reference.strip().upper())
+
+    def lookup_by_hash(self, file_hash):
+        if self.fail_mode == "offline":
+            raise RuntimeError("RPC connection refused: node offline")
+        return self.by_hash.get(file_hash.lower())
 
     def register_and_verify(self, reference, file_hash, issuer):
         if self.fail_mode == "offline":
@@ -136,12 +142,14 @@ class MockE2EBlockchainRegistry:
 
         # Real confirmed registration with independent read-back
         tx_hash = f"0xreg_{uuid.uuid4().hex[:12]}"
-        self.records[ref_key] = {
+        rec = {
             "file_hash": canonical_hash,
             "issuer": issuer.lower(),
             "registered_at": 1700000000,
             "revoked": False
         }
+        self.records[ref_key] = rec
+        self.by_hash[canonical_hash] = rec
 
         # Independent on-chain read-back verification
         verified = self.lookup(reference)
@@ -165,6 +173,9 @@ class MockE2EBlockchainRegistry:
         ref_key = reference.strip().upper()
         if ref_key in self.records:
             self.records[ref_key]["revoked"] = True
+            h = self.records[ref_key]["file_hash"]
+            if h in self.by_hash:
+                self.by_hash[h]["revoked"] = True
         return {
             "transaction_hash": f"0xrevoke_{uuid.uuid4().hex[:12]}",
             "gas_used": 26000,

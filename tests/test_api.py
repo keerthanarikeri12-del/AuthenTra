@@ -18,6 +18,10 @@ class FakeRegistry:
     contract = type("Contract", (), {"address": "0x0000000000000000000000000000000000000000"})()
     def health(self): return True
     def lookup(self, reference): return self.record
+    def lookup_by_hash(self, file_hash):
+        if self.record and self.record.get("file_hash", "").lower() == (file_hash or "").lower().removeprefix("0x"):
+            return self.record
+        return None
     def approved(self, address): return True
     def get_network_info(self):
         return {"chain_id": 1337, "network_name": "Local development · chain 1337", "contract_address": "0x0000000000000000000000000000000000000000", "explorer_template": None}

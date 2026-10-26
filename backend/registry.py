@@ -53,10 +53,52 @@ class Registry:
             return False
 
     def lookup(self, reference):
+        if not reference:
+            return None
         value = self.contract.functions.certificates(reference_hash(reference)).call()
         if value[1] == "0x0000000000000000000000000000000000000000":
             return None
-        return {"file_hash": bytes(value[0]).hex(), "issuer": value[1], "registered_at": value[2], "revoked": value[3]}
+        return {"file_hash": bytes(value[0]).hex().lower(), "issuer": value[1], "registered_at": value[2], "revoked": value[3]}
+
+    def lookup_by_hash(self, file_hash: str):
+        if not file_hash:
+            return None
+        canonical = file_hash.lower().removeprefix("0x")
+        if len(canonical) != 64:
+            return None
+        raw_hash = bytes.fromhex(canonical)
+        if hasattr(self.contract.functions, "lookupByHash"):
+            val = self.contract.functions.lookupByHash(raw_hash).call()
+            if val[1] == "0x0000000000000000000000000000000000000000":
+                return None
+            ref_hash_hex = bytes(val[4]).hex().lower() if val[4] != b"\x00" * 32 else None
+            return {
+                "file_hash": bytes(val[0]).hex().lower(),
+                "issuer": val[1],
+                "registered_at": val[2],
+                "revoked": val[3],
+                "reference_hash": ref_hash_hex,
+            }
+        elif hasattr(self.contract.functions, "certificatesByHash"):
+            val = self.contract.functions.certificatesByHash(raw_hash).call()
+            if val[1] == "0x0000000000000000000000000000000000000000":
+                return None
+            ref_hash_hex = None
+            if hasattr(self.contract.functions, "referenceByFileHash"):
+                try:
+                    raw_ref = self.contract.functions.referenceByFileHash(raw_hash).call()
+                    if raw_ref != b"\x00" * 32:
+                        ref_hash_hex = bytes(raw_ref).hex().lower()
+                except Exception:
+                    pass
+            return {
+                "file_hash": bytes(val[0]).hex().lower(),
+                "issuer": val[1],
+                "registered_at": val[2],
+                "revoked": val[3],
+                "reference_hash": ref_hash_hex,
+            }
+        return None
 
     def approved(self, address):
         return self.contract.functions.approvedIssuers(Web3.to_checksum_address(address)).call()
@@ -141,10 +183,11 @@ class Registry:
         # Independent on-chain read verification
         try:
             verified_record = self.lookup(reference)
+            verified_hash_record = self.lookup_by_hash(canonical_hash)
         except Exception as exc:
             raise UncertainTransactionError(tx_result["transaction_hash"], f"Transaction {tx_result['transaction_hash']} confirmed, but read-back verification failed due to RPC error: {exc}") from exc
 
-        if not verified_record:
+        if not verified_record or not verified_hash_record:
             raise RuntimeError("On-chain verification failed: record not found after transaction confirmation.")
         if verified_record["file_hash"].lower() != canonical_hash:
             raise RuntimeError(f"On-chain verification failed: on-chain hash {verified_record['file_hash']} does not match expected {canonical_hash}.")

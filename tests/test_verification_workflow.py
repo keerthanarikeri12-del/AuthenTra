@@ -37,6 +37,15 @@ class MockVerificationBlockchain:
             raise RuntimeError("RPC connection refused: node offline")
         return self.records.get(reference.strip().upper())
 
+    def lookup_by_hash(self, file_hash):
+        if self.fail_mode == "offline":
+            raise RuntimeError("RPC connection refused: node offline")
+        canonical = (file_hash or "").lower().removeprefix("0x")
+        for ref, rec in self.records.items():
+            if rec.get("file_hash", "").lower() == canonical:
+                return {**rec, "reference": ref}
+        return None
+
     def approved(self, address):
         if self.fail_mode == "offline":
             raise RuntimeError("RPC connection refused: node offline")

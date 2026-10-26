@@ -12,7 +12,10 @@ const stageLabels = {
   REGISTRATION_FAILED: 'Registration Failed',
   REGISTRATION_STATUS_UNCERTAIN: 'Registration Status Uncertain',
   VERIFIED: 'Verified',
+  TAMPERING_DETECTED: 'Tampering Detected',
   POSSIBLE_TAMPERING_OR_FILE_MISMATCH: 'Possible Tampering or File Mismatch',
+  NOT_REGISTERED: 'Not Registered',
+  INCONCLUSIVE: 'Inconclusive',
   NOT_REGISTERED_OR_INCONCLUSIVE: 'Not Registered or Inconclusive',
   REVOKED: 'Revoked',
   ISSUER_NOT_AUTHORIZED: 'Issuer Not Authorized',
@@ -80,10 +83,10 @@ function getBadgeStatus(item, issuing) {
     if (item.status === 'AWAITING_REVIEW' || item.state === 'awaiting_review') return 'possible_tampering';
     return 'inconclusive';
   }
-  const cat = item.result?.category;
+  const cat = item.result?.verification_status || item.result?.category;
   const stat = item.result?.status;
   if (cat === 'VERIFIED' || stat === 'verified') return 'verified';
-  if (cat === 'POSSIBLE_TAMPERING_OR_FILE_MISMATCH' || stat === 'possible_tampering') return 'possible_tampering';
+  if (cat === 'TAMPERING_DETECTED' || cat === 'POSSIBLE_TAMPERING_OR_FILE_MISMATCH' || stat === 'possible_tampering') return 'possible_tampering';
   if (cat === 'REVOKED' || stat === 'revoked') return 'revoked';
   if (cat === 'ISSUER_NOT_AUTHORIZED' || stat === 'not_verified') return 'not_verified';
   if (cat === 'INVALID_FILE' || stat === 'invalid_file' || item.state === 'rejected') return 'not_verified';
@@ -289,13 +292,13 @@ export default function CertificateUpload({mode = 'verify', api, Badge, Result, 
       {!issuing && batch.summary && <div className="upload-summary" aria-live="polite">{[['total','Total files'],['valid','Valid files'],['rejected','Rejected'],['pending','Pending'],['successful','Checks completed'],['failed','Failures']].map(([key, label]) => <div key={key}><strong>{batch.summary[key]}</strong><span>{label}</span></div>)}</div>}
       {!issuing && (batch.items || []).length > 1 && (() => {
         const catCounts = {
-          verified: (batch.items || []).filter(i => (i.result?.category === 'VERIFIED' || i.result?.status === 'verified')).length,
-          mismatched: (batch.items || []).filter(i => (i.result?.category === 'POSSIBLE_TAMPERING_OR_FILE_MISMATCH' || i.result?.status === 'possible_tampering')).length,
-          unregistered: (batch.items || []).filter(i => (i.result?.category === 'NOT_REGISTERED_OR_INCONCLUSIVE' || ['not_registered', 'inconclusive'].includes(i.result?.status))).length,
-          revoked: (batch.items || []).filter(i => (i.result?.category === 'REVOKED' || i.result?.status === 'revoked')).length,
-          issuer_not_authorized: (batch.items || []).filter(i => (i.result?.category === 'ISSUER_NOT_AUTHORIZED' || i.result?.status === 'not_verified')).length,
-          invalid: (batch.items || []).filter(i => (i.result?.category === 'INVALID_FILE' || i.state === 'rejected' || i.result?.status === 'invalid_file')).length,
-          unavailable: (batch.items || []).filter(i => (i.result?.category === 'VERIFICATION_UNAVAILABLE' || i.result?.status === 'unable_to_authenticate')).length,
+          verified: (batch.items || []).filter(i => (i.result?.verification_status === 'VERIFIED' || i.result?.category === 'VERIFIED' || i.result?.status === 'verified')).length,
+          mismatched: (batch.items || []).filter(i => (['POSSIBLE_TAMPERING_OR_FILE_MISMATCH', 'TAMPERING_DETECTED'].includes(i.result?.verification_status) || ['POSSIBLE_TAMPERING_OR_FILE_MISMATCH', 'TAMPERING_DETECTED'].includes(i.result?.category) || i.result?.status === 'possible_tampering')).length,
+          unregistered: (batch.items || []).filter(i => (['NOT_REGISTERED_OR_INCONCLUSIVE', 'NOT_REGISTERED', 'INCONCLUSIVE'].includes(i.result?.verification_status) || ['NOT_REGISTERED_OR_INCONCLUSIVE', 'NOT_REGISTERED', 'INCONCLUSIVE'].includes(i.result?.category) || ['not_registered', 'inconclusive'].includes(i.result?.status))).length,
+          revoked: (batch.items || []).filter(i => (i.result?.verification_status === 'REVOKED' || i.result?.category === 'REVOKED' || i.result?.status === 'revoked')).length,
+          issuer_not_authorized: (batch.items || []).filter(i => (i.result?.verification_status === 'ISSUER_NOT_AUTHORIZED' || i.result?.category === 'ISSUER_NOT_AUTHORIZED' || i.result?.status === 'not_verified')).length,
+          invalid: (batch.items || []).filter(i => (i.result?.verification_status === 'INVALID_FILE' || i.result?.category === 'INVALID_FILE' || i.state === 'rejected' || i.result?.status === 'invalid_file')).length,
+          unavailable: (batch.items || []).filter(i => (i.result?.verification_status === 'VERIFICATION_UNAVAILABLE' || i.result?.category === 'VERIFICATION_UNAVAILABLE' || i.result?.status === 'unable_to_authenticate')).length,
         };
         return (
           <div className="verification-category-summary" style={{display: 'flex', flexWrap: 'wrap', gap: '8px', margin: '12px 0 6px'}} aria-label="Verification category breakdown">

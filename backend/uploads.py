@@ -151,13 +151,13 @@ def snapshot(job, user):
         res['registration_summary'] = reg_counts
     if row['mode'] == 'verify':
         res['verification_summary'] = {
-            'verified': sum(1 for i in items if (i.get('result') and (i['result'].get('category') == 'VERIFIED' or i['result'].get('status') == 'verified'))),
-            'mismatched': sum(1 for i in items if (i.get('result') and (i['result'].get('category') == 'POSSIBLE_TAMPERING_OR_FILE_MISMATCH' or i['result'].get('status') == 'possible_tampering'))),
-            'unregistered': sum(1 for i in items if (i.get('result') and (i['result'].get('category') == 'NOT_REGISTERED_OR_INCONCLUSIVE' or i['result'].get('status') in ('not_registered', 'inconclusive')))),
-            'revoked': sum(1 for i in items if (i.get('result') and (i['result'].get('category') == 'REVOKED' or i['result'].get('status') == 'revoked'))),
-            'issuer_not_authorized': sum(1 for i in items if (i.get('result') and (i['result'].get('category') == 'ISSUER_NOT_AUTHORIZED' or i['result'].get('status') == 'not_verified'))),
-            'unavailable': sum(1 for i in items if (i.get('result') and (i['result'].get('category') == 'VERIFICATION_UNAVAILABLE' or i['result'].get('status') == 'unable_to_authenticate'))),
-            'invalid': sum(1 for i in items if (i['state'] == 'rejected' or (i.get('result') and (i['result'].get('category') == 'INVALID_FILE' or i['result'].get('status') == 'invalid_file')))),
+            'verified': sum(1 for i in items if (i.get('result') and (i['result'].get('verification_status') == 'VERIFIED' or i['result'].get('category') == 'VERIFIED' or i['result'].get('status') == 'verified'))),
+            'mismatched': sum(1 for i in items if (i.get('result') and (i['result'].get('verification_status') == 'TAMPERING_DETECTED' or i['result'].get('category') in ('POSSIBLE_TAMPERING_OR_FILE_MISMATCH', 'TAMPERING_DETECTED') or i['result'].get('status') in ('possible_tampering', 'TAMPERING_DETECTED')))),
+            'unregistered': sum(1 for i in items if (i.get('result') and (i['result'].get('verification_status') in ('NOT_REGISTERED', 'INCONCLUSIVE') or i['result'].get('category') in ('NOT_REGISTERED_OR_INCONCLUSIVE', 'NOT_REGISTERED', 'INCONCLUSIVE') or i['result'].get('status') in ('not_registered', 'inconclusive', 'NOT_REGISTERED', 'INCONCLUSIVE')))),
+            'revoked': sum(1 for i in items if (i.get('result') and (i['result'].get('verification_status') == 'REVOKED' or i['result'].get('category') == 'REVOKED' or i['result'].get('status') in ('revoked', 'REVOKED')))),
+            'issuer_not_authorized': sum(1 for i in items if (i.get('result') and (i['result'].get('verification_status') == 'ISSUER_NOT_AUTHORIZED' or i['result'].get('category') == 'ISSUER_NOT_AUTHORIZED' or i['result'].get('status') in ('not_verified', 'ISSUER_NOT_AUTHORIZED')))),
+            'unavailable': sum(1 for i in items if (i.get('result') and (i['result'].get('verification_status') == 'VERIFICATION_UNAVAILABLE' or i['result'].get('category') == 'VERIFICATION_UNAVAILABLE' or i['result'].get('status') in ('unable_to_authenticate', 'VERIFICATION_UNAVAILABLE')))),
+            'invalid': sum(1 for i in items if (i['state'] == 'rejected' or (i.get('result') and (i['result'].get('verification_status') == 'INVALID_FILE' or i['result'].get('category') == 'INVALID_FILE' or i['result'].get('status') in ('invalid_file', 'INVALID_FILE'))))),
         }
     return res
 

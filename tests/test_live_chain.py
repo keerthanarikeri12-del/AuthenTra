@@ -135,7 +135,7 @@ class TestLiveBlockchainDirect:
     def test_live_registration_idempotency(self, live_chain):
         """Re-submitting the same reference and hash returns verified idempotent result without re-mining."""
         ref = f"AT-LIVE-{uuid.uuid4().hex[:8].upper()}"
-        file_hash = hashlib.sha256(b"idempotency-check-payload").hexdigest()
+        file_hash = hashlib.sha256(b"idempotency-check-payload-" + uuid.uuid4().bytes).hexdigest()
         issuer = [k for k in live_chain.keys if k != live_chain.owner][0]
 
         first = live_chain.register_and_verify(ref, file_hash, issuer)
@@ -152,8 +152,8 @@ class TestLiveBlockchainDirect:
     def test_live_duplicate_conflict_rejection(self, live_chain):
         """Attempting to overwrite an existing reference with a different hash is rejected."""
         ref = f"AT-LIVE-{uuid.uuid4().hex[:8].upper()}"
-        hash_1 = hashlib.sha256(b"original-payload").hexdigest()
-        hash_2 = hashlib.sha256(b"conflicting-payload").hexdigest()
+        hash_1 = hashlib.sha256(b"original-payload-" + uuid.uuid4().bytes).hexdigest()
+        hash_2 = hashlib.sha256(b"conflicting-payload-" + uuid.uuid4().bytes).hexdigest()
         issuer = [k for k in live_chain.keys if k != live_chain.owner][0]
 
         live_chain.register_and_verify(ref, hash_1, issuer)
@@ -197,7 +197,7 @@ class TestLiveBlockchainDirect:
     def test_live_certificate_revocation(self, live_chain):
         """An authorized issuer can revoke their registered certificate on the live blockchain."""
         ref = f"AT-REVOKE-{uuid.uuid4().hex[:8].upper()}"
-        file_hash = hashlib.sha256(b"revocation-target").hexdigest()
+        file_hash = hashlib.sha256(b"revocation-target-" + uuid.uuid4().bytes).hexdigest()
         issuer = [k for k in live_chain.keys if k != live_chain.owner][0]
 
         live_chain.register_and_verify(ref, file_hash, issuer)

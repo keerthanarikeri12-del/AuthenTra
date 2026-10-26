@@ -24,9 +24,13 @@ const labels = {
   verified: 'Verified',
   VERIFIED: 'Verified',
   possible_tampering: 'Possible Tampering',
+  tampering_detected: 'Tampering Detected',
+  TAMPERING_DETECTED: 'Tampering Detected',
   POSSIBLE_TAMPERING_OR_FILE_MISMATCH: 'Possible Tampering or File Mismatch',
-  not_registered: 'Not Registered or Inconclusive',
-  inconclusive: 'Not Registered or Inconclusive',
+  not_registered: 'Not Registered',
+  NOT_REGISTERED: 'Not Registered',
+  inconclusive: 'Inconclusive',
+  INCONCLUSIVE: 'Inconclusive',
   NOT_REGISTERED_OR_INCONCLUSIVE: 'Not Registered or Inconclusive',
   revoked: 'Revoked',
   REVOKED: 'Revoked',
@@ -669,8 +673,8 @@ function Result({result: r, autoScroll = true}) {
     ['issuer_approved', 'Issuer approved by platform'],
     ['hash_matches', 'Original file matches registered record']
   ];
-  const category = r.category || (r.status === 'verified' ? 'VERIFIED' : r.status === 'possible_tampering' ? 'POSSIBLE_TAMPERING_OR_FILE_MISMATCH' : r.status === 'revoked' ? 'REVOKED' : r.status === 'not_verified' ? 'ISSUER_NOT_AUTHORIZED' : r.status === 'unable_to_authenticate' ? 'VERIFICATION_UNAVAILABLE' : r.status === 'invalid_file' ? 'INVALID_FILE' : 'NOT_REGISTERED_OR_INCONCLUSIVE');
-  const badgeClass = category === 'VERIFIED' ? 'verified' : category === 'POSSIBLE_TAMPERING_OR_FILE_MISMATCH' ? 'possible_tampering' : category === 'REVOKED' || category === 'ISSUER_NOT_AUTHORIZED' ? 'revoked' : category === 'INVALID_FILE' ? 'not_verified' : category === 'VERIFICATION_UNAVAILABLE' ? 'unable_to_authenticate' : 'inconclusive';
+  const category = r.verification_status || r.category || (r.status === 'verified' ? 'VERIFIED' : (r.status === 'possible_tampering' || r.status === 'tampering_detected') ? 'TAMPERING_DETECTED' : r.status === 'revoked' ? 'REVOKED' : r.status === 'not_verified' ? 'ISSUER_NOT_AUTHORIZED' : r.status === 'unable_to_authenticate' ? 'VERIFICATION_UNAVAILABLE' : r.status === 'invalid_file' ? 'INVALID_FILE' : 'NOT_REGISTERED_OR_INCONCLUSIVE');
+  const badgeClass = category === 'VERIFIED' ? 'verified' : (category === 'TAMPERING_DETECTED' || category === 'POSSIBLE_TAMPERING_OR_FILE_MISMATCH') ? 'possible_tampering' : (category === 'REVOKED' || category === 'ISSUER_NOT_AUTHORIZED') ? 'revoked' : category === 'INVALID_FILE' ? 'not_verified' : category === 'VERIFICATION_UNAVAILABLE' ? 'unable_to_authenticate' : 'inconclusive';
   const isHashMatch = r.hash_matches === true;
   const isHashMismatch = r.hash_matches === false;
 

@@ -16,18 +16,30 @@ try {
   await rejected(contract.connect(issuer).register(reference,hash),'Unapproved issuer cannot register');
   await (await contract.setIssuer(await issuer.getAddress(),true)).wait();
   await (await contract.connect(issuer).register(reference,hash,{gasLimit:300000})).wait();
-  assert.equal((await contract.certificates(reference)).fileHash,hash);passed++;console.log('PASS Original SHA-256 stored');
+  assert.equal((await contract.certificates(reference)).fileHash,hash);passed++;console.log('PASS Original SHA-256 stored by reference');
+  assert.equal((await contract.certificatesByHash(hash)).fileHash,hash);passed++;console.log('PASS Original SHA-256 stored by fileHash');
+  const lookupRes = await contract.lookupByHash(hash);
+  assert.equal(lookupRes[0], hash);
+  assert.equal(lookupRes[1], await issuer.getAddress());
+  assert.equal(lookupRes[3], false); // not revoked
+  assert.equal(lookupRes[4], reference); // linked referenceHash
+  passed++;console.log('PASS lookupByHash returns correct linked certificate');
   await rejected(contract.connect(issuer).register(reference,hash),'Duplicate reference cannot overwrite record');
+  const referenceNew = ethers.sha256(ethers.toUtf8Bytes('AT-TEST-NEW'));
+  await rejected(contract.connect(issuer).register(referenceNew,hash),'Duplicate fileHash cannot be registered');
   await (await contract.setIssuer(await stranger.getAddress(),true)).wait();
   await rejected(contract.connect(stranger).revoke(reference),'Different approved issuer cannot revoke');
   await (await contract.setIssuer(await issuer.getAddress(),false)).wait();
   await rejected(contract.connect(issuer).revoke(reference),'Disabled issuer cannot revoke');
   await (await contract.revoke(reference)).wait();
   assert.equal((await contract.certificates(reference)).revoked,true);passed++;console.log('PASS Owner can revoke disabled-issuer certificate');
+  assert.equal((await contract.certificatesByHash(hash)).revoked,true);passed++;console.log('PASS Revocation syncs to certificatesByHash');
   await rejected(contract.revoke(reference),'Revocation is permanent and idempotence protected');
   const reference2=ethers.sha256(ethers.toUtf8Bytes('AT-TEST-002'));
-  await (await contract.connect(stranger).register(reference2,hash)).wait();
+  const hash2=ethers.sha256(ethers.toUtf8Bytes('original-2'));
+  await (await contract.connect(stranger).register(reference2,hash2)).wait();
   await (await contract.connect(stranger).revoke(reference2)).wait();
   assert.equal((await contract.certificates(reference2)).revoked,true);passed++;console.log('PASS Issuer can revoke its own certificate');
+  assert.equal((await contract.certificatesByHash(hash2)).revoked,true);passed++;console.log('PASS Issuer revocation marks certificatesByHash as revoked');
   console.log(`${passed} smart-contract checks passed.`);
 } finally {await raw.disconnect();}

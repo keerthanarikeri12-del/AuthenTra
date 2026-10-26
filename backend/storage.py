@@ -224,6 +224,8 @@ def initialize():
         conn.execute("CREATE INDEX IF NOT EXISTS verifications_ref_idx ON verifications(reference)")
         conn.execute("CREATE INDEX IF NOT EXISTS registrations_issuer_idx ON registrations(issuer_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS registrations_created_idx ON registrations(created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS registrations_file_hash_idx ON registrations(lower(file_hash))")
+        conn.execute("CREATE INDEX IF NOT EXISTS registrations_ref_idx ON registrations(reference)")
         conn.execute("CREATE INDEX IF NOT EXISTS audit_user_ref_idx ON audit(user_id, reference)")
 
 def seed_demo(registry):

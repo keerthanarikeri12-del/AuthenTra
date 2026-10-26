@@ -30,15 +30,19 @@ LABELS = {
     "verified": "Verified",
     "VERIFIED": "Verified",
     "possible_tampering": "Possible Tampering",
+    "tampering_detected": "Tampering Detected",
+    "TAMPERING_DETECTED": "Tampering Detected",
     "POSSIBLE_TAMPERING_OR_FILE_MISMATCH": "Possible Tampering or File Mismatch",
     "not_registered": "Not Registered",
+    "NOT_REGISTERED": "Not Registered",
     "inconclusive": "Inconclusive",
+    "INCONCLUSIVE": "Inconclusive",
     "NOT_REGISTERED_OR_INCONCLUSIVE": "Not Registered or Inconclusive",
     "revoked": "Revoked",
     "REVOKED": "Revoked",
-    "not_verified": "Not Verified",
+    "not_verified": "Issuer Not Authorized",
     "ISSUER_NOT_AUTHORIZED": "Issuer Not Authorized",
-    "unable_to_authenticate": "Unable to Authenticate",
+    "unable_to_authenticate": "Verification Unavailable",
     "VERIFICATION_UNAVAILABLE": "Verification Unavailable",
     "invalid_file": "Invalid File",
     "INVALID_FILE": "Invalid File",
@@ -527,79 +531,256 @@ def process_verification(data, kind, supplied_reference, user):
     extracted = analysis["fields"]["reference"]
     checks = {"reference_found": False, "hash_matches": None, "issuer_approved": None, "active": None}
     record = None
+    record_source = None
     authorized = False
     reference = None
-    ref_candidate = supplied_reference or extracted or ""
+    reg_row = None
+    status = "inconclusive"
+    verification_status = "INCONCLUSIVE"
+    category = "NOT_REGISTERED_OR_INCONCLUSIVE"
+    message = "A readable certificate reference could not be detected. Confirm the reference from the issuing institution and try again."
+    hash_matches = None
+    hash_comparison = "No registered hash available for comparison"
+    hash_comparison_result = "NOT_COMPARED"
+
+    chain = None
     try:
-        reference = normalize_reference(ref_candidate)
-    except ValueError:
-        reference = None
-        status = "inconclusive"
-        category = "NOT_REGISTERED_OR_INCONCLUSIVE"
-        message = "A readable certificate reference could not be detected. Confirm the reference from the issuing institution and try again."
-        checks["reference_found"] = False
-    else:
-        if supplied_reference and extracted and reference != extracted.upper():
-            analysis["warnings"].append("The entered certificate ID differs from the extracted ID. This result applies to the entered ID.")
-        try:
-            chain = registry()
-            record = chain.lookup(reference)
-            if record is None:
-                status = "not_registered"
-                category = "NOT_REGISTERED_OR_INCONCLUSIVE"
-                message = "No registration exists for the supplied certificate reference. This does not prove that the document is forged."
-                checks["reference_found"] = False
-            else:
-                checks["reference_found"] = True
+        chain = registry()
+        # 1. Primary lookup: query by exact normalized SHA-256 file hash
+        if hasattr(chain, "lookup_by_hash"):
+            record = chain.lookup_by_hash(digest)
+            if record:
+                record_source = "hash"
+
+        # 2. If found directly by file hash on-chain
+        if record is not None:
+            if supplied_reference:
                 try:
-                    authorized = chain.approved(record["issuer"])
-                except Exception:
-                    authorized = False
-                hash_match = record["file_hash"].lower() == digest
-                checks = {
-                    "reference_found": True,
-                    "hash_matches": hash_match,
-                    "issuer_approved": authorized,
-                    "active": not record["revoked"]
-                }
-                status, message = decide(record, digest, authorized)
-                category = CATEGORY_MAP.get(status, "VERIFICATION_UNAVAILABLE")
-        except Exception:
-            status = "unable_to_authenticate"
-            category = "VERIFICATION_UNAVAILABLE"
-            message = "The blockchain registry could not be reached. Please retry when the service is available."
-            checks = {"reference_found": None, "hash_matches": None, "issuer_approved": None, "active": None}
+                    reference = normalize_reference(supplied_reference)
+                except ValueError:
+                    reference = None
+            elif extracted:
+                try:
+                    reference = normalize_reference(extracted)
+                except ValueError:
+                    reference = None
+
+            with connect() as conn:
+                reg_row = conn.execute("SELECT * FROM registrations WHERE lower(file_hash)=lower(?)", (digest,)).fetchone()
+                if not reg_row and reference:
+                    reg_row = conn.execute("SELECT * FROM registrations WHERE reference=?", (reference,)).fetchone()
+                if not reg_row and record.get("reference_hash"):
+                    for r in conn.execute("SELECT * FROM registrations").fetchall():
+                        try:
+                            if reference_hash(r["reference"]).hex().lower() == record["reference_hash"]:
+                                reg_row = r
+                                break
+                        except Exception:
+                            continue
+            if not reference and reg_row:
+                reference = reg_row["reference"]
+
+            try:
+                authorized = chain.approved(record["issuer"])
+            except Exception:
+                authorized = False
+
+            if record["revoked"]:
+                status = "revoked"
+                verification_status = "REVOKED"
+                category = "REVOKED"
+                message = "The issuer or platform owner has revoked this certificate."
+            elif not authorized:
+                status = "not_verified"
+                verification_status = "ISSUER_NOT_AUTHORIZED"
+                category = "ISSUER_NOT_AUTHORIZED"
+                message = "The issuing institution is not currently approved."
+            else:
+                status = "verified"
+                verification_status = "VERIFIED"
+                category = "VERIFIED"
+                message = "Registered and unchanged. The file matches the registered hash, the issuer is approved, and the record is active."
+
+            checks = {
+                "reference_found": True,
+                "hash_matches": True,
+                "issuer_approved": authorized,
+                "active": not record["revoked"]
+            }
+            hash_matches = True
+            hash_comparison = "Exact match between uploaded file hash and registered on-chain hash"
+            hash_comparison_result = "MATCH"
+
+        else:
+            # 3. Not found by exact hash. Check if reference is available to detect tampering or unregistered status.
+            ref_candidate = supplied_reference or extracted or ""
+            ref_norm = None
+            if ref_candidate:
+                try:
+                    ref_norm = normalize_reference(ref_candidate)
+                except ValueError:
+                    ref_norm = None
+
+            if ref_norm:
+                reference = ref_norm
+                if supplied_reference and extracted and reference != extracted.upper():
+                    analysis["warnings"].append("The entered certificate ID differs from the extracted ID. This result applies to the entered ID.")
+                ref_record = chain.lookup(reference)
+                if ref_record is not None:
+                    record = ref_record
+                    record_source = "reference"
+                    with connect() as conn:
+                        reg_row = conn.execute("SELECT * FROM registrations WHERE reference=?", (reference,)).fetchone()
+                    try:
+                        authorized = chain.approved(record["issuer"])
+                    except Exception:
+                        authorized = False
+
+                    if record["revoked"]:
+                        status = "revoked"
+                        verification_status = "REVOKED"
+                        category = "REVOKED"
+                        message = "The issuer or platform owner has revoked this certificate."
+                    elif not authorized:
+                        status = "not_verified"
+                        verification_status = "ISSUER_NOT_AUTHORIZED"
+                        category = "ISSUER_NOT_AUTHORIZED"
+                        message = "The issuing institution is not currently approved."
+                    elif record["file_hash"].lower() == digest.lower():
+                        status = "verified"
+                        verification_status = "VERIFIED"
+                        category = "VERIFIED"
+                        message = "Registered and unchanged. The file matches the registered hash, the issuer is approved, and the record is active."
+                        checks = {
+                            "reference_found": True,
+                            "hash_matches": True,
+                            "issuer_approved": authorized,
+                            "active": not record["revoked"]
+                        }
+                        hash_matches = True
+                        hash_comparison = "Exact match between uploaded file hash and registered on-chain hash"
+                        hash_comparison_result = "MATCH"
+                    else:
+                        status = "possible_tampering"
+                        verification_status = "TAMPERING_DETECTED"
+                        category = "POSSIBLE_TAMPERING_OR_FILE_MISMATCH"
+                        message = "This file differs from the registered original. Re-saving, re-exporting, compression, and rescanning also change file bytes. Verify the original issued file."
+                        checks = {
+                            "reference_found": True,
+                            "hash_matches": False,
+                            "issuer_approved": authorized,
+                            "active": not record["revoked"]
+                        }
+                        hash_matches = False
+                        hash_comparison = "Uploaded file hash differs from registered on-chain hash (possible tampering, re-export, or rescan)"
+                        hash_comparison_result = "MISMATCH"
+                else:
+                    status = "not_registered"
+                    verification_status = "NOT_REGISTERED"
+                    category = "NOT_REGISTERED_OR_INCONCLUSIVE"
+                    message = "No registration exists for the supplied certificate reference. This does not prove that the document is forged."
+                    checks = {"reference_found": False, "hash_matches": None, "issuer_approved": None, "active": None}
+                    hash_matches = None
+                    hash_comparison = "No registered hash available for comparison"
+                    hash_comparison_result = "NOT_COMPARED"
+            else:
+                reference = None
+                status = "inconclusive"
+                verification_status = "INCONCLUSIVE"
+                category = "NOT_REGISTERED_OR_INCONCLUSIVE"
+                message = "A readable certificate reference could not be detected. Confirm the reference from the issuing institution and try again."
+                checks = {"reference_found": False, "hash_matches": None, "issuer_approved": None, "active": None}
+                hash_matches = None
+                hash_comparison = "No registered hash available for comparison"
+                hash_comparison_result = "NOT_COMPARED"
+
+    except Exception:
+        status = "unable_to_authenticate"
+        verification_status = "VERIFICATION_UNAVAILABLE"
+        category = "VERIFICATION_UNAVAILABLE"
+        message = "The blockchain registry could not be reached. Please retry when the service is available."
+        checks = {"reference_found": None, "hash_matches": None, "issuer_approved": None, "active": None}
+        hash_matches = None
+        hash_comparison = "Blockchain registry unavailable for hash verification"
+        hash_comparison_result = "NOT_COMPARED"
 
     elapsed = round((time.perf_counter() - start) * 1000, 1)
     verified_at = datetime.now(timezone.utc).isoformat()
 
+    # Determine blockchain record status
+    if category == "VERIFICATION_UNAVAILABLE":
+        blockchain_record_status = "UNAVAILABLE"
+    elif record is None:
+        blockchain_record_status = "NOT_FOUND"
+    elif record["revoked"]:
+        blockchain_record_status = "REVOKED"
+    elif not authorized:
+        blockchain_record_status = "ISSUER_UNAUTHORIZED"
+    else:
+        blockchain_record_status = "ACTIVE"
+
+    # Network information
+    fallback_addr = getattr(getattr(chain, "contract", None), "address", "0x0") if chain else "0x0"
+    try:
+        net_info = chain.get_network_info() if chain else {"chain_id": 1337, "network_name": "Local development · chain 1337", "contract_address": fallback_addr}
+    except Exception:
+        net_info = {"chain_id": 1337, "network_name": "Local development · chain 1337", "contract_address": fallback_addr}
+
+    chain_id = net_info.get("chain_id", 1337)
+    network_name = net_info.get("network_name", "Local development · chain 1337")
+    contract_address = net_info.get("contract_address") or fallback_addr
+
+    # Registered metadata from database
     issuer_name = None
     reg_tx = None
+    block_number = None
+    reg_date = None
     explorer_url = None
-    blockchain_record_status = "NOT_FOUND" if record is None else ("REVOKED" if record["revoked"] else ("ACTIVE" if authorized else "ISSUER_UNAUTHORIZED"))
+
+    reg_dict = dict(reg_row) if reg_row else {}
+    if reg_dict:
+        reg_tx = reg_dict.get("transaction_hash")
+        block_number = reg_dict.get("block_number")
+        reg_date = reg_dict.get("registered_at")
+        if reg_dict.get("metadata"):
+            try:
+                meta = json.loads(reg_dict["metadata"])
+                if isinstance(meta, dict):
+                    if not analysis["fields"].get("name") and meta.get("recipient_name"):
+                        analysis["fields"]["name"] = meta["recipient_name"]
+                    if not analysis["fields"].get("course") and meta.get("course"):
+                        analysis["fields"]["course"] = meta["course"]
+                    if not analysis["fields"].get("institution") and meta.get("institution_name"):
+                        analysis["fields"]["institution"] = meta["institution_name"]
+                    if not analysis["fields"].get("issue_date") and meta.get("issue_date"):
+                        analysis["fields"]["issue_date"] = meta["issue_date"]
+            except Exception:
+                pass
 
     if record:
+        if not reg_date and record.get("registered_at"):
+            reg_date = str(record["registered_at"])
         with connect() as conn:
             issuer_row = conn.execute("SELECT name FROM users WHERE lower(wallet)=lower(?)", (record["issuer"],)).fetchone()
             if issuer_row:
                 issuer_name = issuer_row["name"]
             else:
                 issuer_name = f"Wallet {record['issuer'][:8]}...{record['issuer'][-6:]}"
-            reg_row = conn.execute("SELECT transaction_hash FROM registrations WHERE reference=?", (reference,)).fetchone()
-            if reg_row and reg_row["transaction_hash"]:
-                reg_tx = reg_row["transaction_hash"]
-                try:
-                    explorer_url = chain.get_explorer_url(reg_tx)
-                except Exception:
-                    explorer_url = None
+            if not reg_tx and reference:
+                r_row = conn.execute("SELECT transaction_hash, block_number FROM registrations WHERE reference=?", (reference,)).fetchone()
+                if r_row:
+                    reg_tx = r_row["transaction_hash"]
+                    block_number = r_row["block_number"]
+        if reg_tx and chain and hasattr(chain, "get_explorer_url"):
+            try:
+                explorer_url = chain.get_explorer_url(reg_tx)
+            except Exception:
+                explorer_url = None
 
-    hash_matches = checks.get("hash_matches")
-    if record is None:
-        hash_comparison = "No registered hash available for comparison"
-    elif hash_matches:
-        hash_comparison = "Exact match between uploaded file hash and registered on-chain hash"
-    else:
-        hash_comparison = "Uploaded file hash differs from registered on-chain hash (possible tampering, re-export, or rescan)"
+    # Detect discrepancies between DB record and on-chain record
+    if record and reg_dict and reg_dict.get("file_hash"):
+        if reg_dict["file_hash"].lower() != record["file_hash"].lower():
+            analysis["warnings"].append("Database file hash differs from trusted on-chain record. Immutable blockchain record takes precedence.")
 
     next_action = CATEGORY_ACTIONS.get(category, "Review the result details and consult the issuing institution.")
 
@@ -612,24 +793,41 @@ def process_verification(data, kind, supplied_reference, user):
         )
         check_id = cursor.lastrowid
 
+    reason = message if verification_status in ("NOT_REGISTERED", "INCONCLUSIVE", "VERIFICATION_UNAVAILABLE", "TAMPERING_DETECTED", "ISSUER_NOT_AUTHORIZED") else None
+
     return {
         "id": check_id,
         "reference": reference,
         "status": status,
+        "verification_status": verification_status,
         "category": category,
-        "label": LABELS.get(category, LABELS.get(status, status)),
+        "label": LABELS.get(verification_status, LABELS.get(category, LABELS.get(status, status))),
         "message": message,
         "next_action": next_action,
+        "reason": reason,
+        "recipient_name": analysis["fields"].get("name"),
+        "course": analysis["fields"].get("course"),
+        "institution": analysis["fields"].get("institution") or issuer_name,
+        "issue_date": analysis["fields"].get("issue_date"),
+        "registered_at": reg_date,
         "file_hash": digest,
         "registered_hash": record["file_hash"] if record else None,
         "hash_matches": hash_matches,
         "hash_comparison": hash_comparison,
+        "hash_comparison_result": hash_comparison_result,
         "issuer": record["issuer"] if record else None,
         "issuer_name": issuer_name,
         "issuer_authorized": authorized if record else None,
         "blockchain_record_status": blockchain_record_status,
+        "chain_id": chain_id,
+        "network": str(chain_id),
+        "network_name": network_name,
+        "contract_address": contract_address,
         "transaction_hash": reg_tx,
+        "block_number": block_number,
         "explorer_url": explorer_url,
+        "ocr_confidence": analysis.get("ocr_confidence"),
+        "extraction_method": analysis.get("extraction_method"),
         "verified_at": verified_at,
         "checks": checks,
         "duration_ms": elapsed,
@@ -659,10 +857,17 @@ async def verify(user: User, file: UploadFile = File(...), reference: str = Form
             "id": check_id,
             "reference": None,
             "status": "unable_to_authenticate",
+            "verification_status": "INVALID_FILE",
             "category": "INVALID_FILE",
             "label": "Invalid File",
             "message": exc.detail,
             "next_action": "Ensure the file is an unencrypted, valid PDF, PNG, or JPEG under the maximum size limit and try again.",
+            "reason": exc.detail,
+            "recipient_name": None,
+            "course": None,
+            "institution": None,
+            "issue_date": None,
+            "registered_at": None,
             "checks": {"reference_found": False, "hash_matches": None, "issuer_approved": None, "active": None},
             "ai": {"status": "unavailable", "label": "AI analysis unavailable", "score": None},
             "warnings": [],
@@ -671,12 +876,20 @@ async def verify(user: User, file: UploadFile = File(...), reference: str = Form
             "registered_hash": None,
             "hash_matches": None,
             "hash_comparison": "Cannot hash invalid file",
+            "hash_comparison_result": "NOT_COMPARED",
             "issuer": None,
             "issuer_name": None,
             "issuer_authorized": None,
             "blockchain_record_status": "NOT_CHECKED",
+            "chain_id": 1337,
+            "network": "1337",
+            "network_name": "Local development · chain 1337",
+            "contract_address": None,
             "transaction_hash": None,
+            "block_number": None,
             "explorer_url": None,
+            "ocr_confidence": None,
+            "extraction_method": None,
             "verified_at": now_iso,
             "duration_ms": 0.0,
         }
