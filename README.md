@@ -16,33 +16,92 @@ On this Windows machine, start or restart it from the project directory:
 
 The script starts the local blockchain and backend in hidden background processes, prepares missing demonstration data, and prints the application URL. It does not publish a website or use real cryptocurrency. It requires the dependencies described below.
 
-Choose **User Login**, **Institution Login**, or **Administrator**, then enter your credentials. For local demo login:
+Choose **User Portal**, **Institution Portal**, or the dedicated **Admin Portal** (`#admin`), then enter your credentials. For local demo login:
 
-| Role | Email |
-| --- | --- |
-| Verifier | `verifier@authentra.demo` |
-| Approved institution | `issuer@authentra.demo` |
-| Pending institution | `pending@authentra.demo` |
-| Platform administrator | `owner@authentra.demo` |
+| Role (Canonical) | Alias / Legacy | Email | Permissions & Scope |
+| --- | --- | --- | --- |
+| **`USER`** | `verifier` | `verifier@authentra.demo` | Upload & verify certificates (max 5 per batch); view own private verification history. Strictly cannot register certificates or approve institutions. |
+| **`INSTITUTION_ADMIN`** | `institution` | `issuer@authentra.demo` | Accredited institutional login; bulk register certificates on blockchain (up to 100 files); OCR extraction; manage & revoke own issued credentials. Strictly cannot approve institutions or view private user records. |
+| **`SYSTEM_ADMIN`** | `owner` | `owner@authentra.demo` | Dedicated admin login portal (`#admin`); approve/suspend/reject/revoke institutions with on-chain `setIssuer` sync; platform-wide certificate oversight, verification logs, and immutable audit trail. **Strictly prohibited from uploading/registering certificates.** |
 
 All development accounts use `AuthenTra-demo-2026!`. These accounts are created only in explicit demonstration mode. Never use them or the deterministic development wallets on a public deployment.
 
-## Demonstration
+## Three-Role Architecture & Separation of Duties
 
-1. Open the Verifier workspace.
-2. Choose **Original**, then **Begin verification**: expect **Verified**.
-3. Choose **Modified**: expect **Possible Tampering**.
-4. Choose **Unregistered**: expect **Not Registered**.
-5. Choose **Revoked**: expect **Revoked**.
-6. Choose **Scanned copy**: expect **Possible Tampering**, because the scan is not byte-identical to the PDF. Clear the ID to exercise OCR extraction.
-7. Inspect the independent check results and the separate AI advisory. Save the JSON report or export your history as CSV.
-8. Sign in as Institution to register one or several original files and revoke your records. Assign a unique ID per file. Reusing an ID returns an explicit error.
-9. Sign in as Administrator to inspect institutions, approve or disable them and review activity. Issuer approval is an on-chain action.
-10. Open **System architecture** and **Evaluation & evidence** to explain the research contribution and its limitations.
+### ROLE 1: USER
+- **Authentication**: Native email/password or Google OAuth / Apple ID integration (`/api/auth/oauth/{provider}/url`). Public sign-up always assigns the `USER` role; self-escalation is blocked.
+- **Access & Permissions**:
+  - Access to dedicated **User Dashboard**.
+  - Upload single certificates or batches strictly capped at a **maximum of 5 files** per batch.
+  - View personal, private verification history (`GET /api/history` filtered by authenticated `user_id`).
+  - Read-only access to system architecture and evaluation metrics.
+  - Forbidden from accessing certificate registration (`POST /api/certificates`), bulk issuance, or institution management (returns HTTP 403).
 
-The generated certificates are clearly marked as demonstrations, not real qualifications. Their files are in `samples/`.
+### ROLE 2: INSTITUTION_ADMIN
+- **Authentication**: Sign in using an accredited institutional email address (`.edu`, `.ac.in`, `.edu.in`, `.res.in`, or verified allowlist domain).
+- **Registration & Approval Lifecycle**:
+  1. Institution submits application via `POST /api/auth/institution-signup`.
+  2. Requires 6-digit confirmation code verification (`POST /api/auth/verify-email`).
+  3. Placed into `PENDING_APPROVAL` status until vetted and authorized by a `SYSTEM_ADMIN`.
+  4. Only approved and active institutions (`approval_status == 'APPROVED'`) with configured on-chain signer wallets can execute institutional operations.
+- **Access & Permissions**:
+  - Access to dedicated **Institution Dashboard** displaying signer wallet, accredited domain, and issuance metrics.
+  - Bulk upload certificates without the 5-file limit (configurable up to 100 files / 100 MB).
+  - Register certificates on the blockchain registry (`POST /api/certificates`, `POST /api/certificates/bulk`) after validation and OCR text extraction.
+  - View own institution's registration history and outcomes (`GET /api/certificates` scoped to issuing wallet).
+  - Revoke own issued credentials (`POST /api/certificates/{reference}/revoke`).
+  - Cannot approve own or other institutions (returns HTTP 403).
+  - Cannot view private histories belonging to unrelated users or institutions.
 
-## Included capabilities
+### ROLE 3: SYSTEM_ADMIN
+- **Authentication**: Separate, clearly labeled **Admin Login** entry point (`#admin`, endpoint `POST /api/auth/admin-login`). Non-admin users are rejected with HTTP 403.
+- **Secure Provisioning**: Admin privileges must be assigned through a secure, trusted administrative process. Public registration or user-editable metadata cannot grant administrator rights. Use the dedicated server administrative CLI:
+  ```powershell
+  # Create a new administrator account
+  .\.venv\Scripts\python scripts/create_admin.py --email sysadmin@authentra.gov --password "Strong-Admin-Password-123!" --name "System Administrator"
+
+  # Or promote an existing account
+  .\.venv\Scripts\python scripts/create_admin.py --promote user@example.com
+  ```
+- **Strict Separation of Duties**:
+  - **Zero certificate-upload, bulk-upload, certificate-registration, or blockchain-writing interface or permission.**
+  - Direct calls to `/api/verify`, `/api/uploads`, `/api/certificates` from a `SYSTEM_ADMIN` account return HTTP 403 Forbidden.
+- **Governance & Oversight**:
+  - Approve, reject, suspend, or revoke institution access (`POST /api/institutions/{id}/approval`) synchronized directly with the smart contract via `setIssuer(wallet, approved)`.
+  - Add approved institutions and institutional domain allowlists.
+  - Inspect platform-wide certificate registration records, active/revoked statuses, and on-chain transaction references (`GET /api/admin/certificates`).
+  - Inspect global verification logs and latency analytics without exposing certificate payloads (`GET /api/admin/verifications`).
+  - Inspect complete system audit history with actor, action, reference, transaction hash, client IP, and metadata (`GET /api/admin/audit`).
+  - Cannot impersonate users or institutions.
+
+## Security & Database Policies
+
+- **Backend Enforcement**: All roles and boundaries are strictly enforced in FastAPI route dependencies (`backend/main.py`) via `canonical_role()`, ensuring frontend bypass attempts via direct API calls are blocked with HTTP 403.
+- **Database Migrations**:
+  - SQLite: `migrations/001_roles_and_audit.sql` updates `users` check constraints and adds IP/details columns to `audit`.
+  - Supabase / PostgreSQL: `migrations/002_supabase_rls_policies.sql` defines Row Level Security (RLS) policies for `users`, `registrations`, `verifications`, and `audit` based on JWT claims (`auth.jwt() ->> 'role'`).
+- **Audit Logging**: All privileged administrative and issuer operations (approvals, suspensions, revocations, admin logins) are recorded in the `audit` table with admin user ID, action, reference, transaction hash, client IP, and structured details.
+
+## Demonstration Workflows
+
+1. **User Verification Workflow**:
+   - Sign in via **User Portal** (`verifier@authentra.demo` or OAuth).
+   - Test single certificate verification or select up to 5 files.
+   - Inspect SHA-256 match, blockchain status, issuer validity, and separate AI advisory score.
+   - Review personal history in **Verification history** and export CSV.
+2. **Institution Issuance Workflow**:
+   - Sign in via **Institution Portal** (`issuer@authentra.demo`).
+   - Open **Institution Dashboard** to review issuer status and signer wallet.
+   - Open **Register Credentials** to bulk upload certificates (up to 100 files).
+   - Commit certificates to the blockchain and inspect on-chain transaction receipts.
+   - Manage credentials in **Issued Registry** and test permanent revocation.
+3. **Administrator Governance Workflow**:
+   - Navigate to `#admin` or select **Admin Portal**.
+   - Sign in as Platform Administrator (`owner@authentra.demo`).
+   - Notice the strict governance view with zero upload/registration controls.
+   - Manage institutions under **Institution Governance** (approve or suspend on-chain issuers).
+   - Inspect all platform certificates under **Certificate Oversight**.
+   - Inspect global activity in **Verification Logs** and **System Audit Trail**.
 
 - Authenticated verifier, institution and platform-owner roles; password hashing and HttpOnly JWT cookies.
 - Content-based PDF/PNG/JPEG validation on client and server, 10 MB per file and five-page PDF limit. User batches allow five files; institution registration defaults to 100 files / 100 MB with configurable limits.
