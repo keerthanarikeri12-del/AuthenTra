@@ -1178,8 +1178,8 @@ function AdminDashboardView({dashboard, setPage}) {
         ))}
       </div>
 
-      {dashboard?.pending_institutions > 0 && (
-        <div className="action-queue-grid">
+      <div className="action-queue-grid">
+        {dashboard?.pending_institutions > 0 && (
           <div className="action-queue-card" style={{borderLeft: '4px solid #ca8a04', background: '#fffdf5'}}>
             <h4>Action Required: Pending Institution Approvals</h4>
             <p>
@@ -1191,8 +1191,35 @@ function AdminDashboardView({dashboard, setPage}) {
               </button>
             </div>
           </div>
+        )}
+        <div className="action-queue-card">
+          <h4>Institution Governance</h4>
+          <p>Review accredited institution applications, approve or revoke access, and manage authorized smart contract signers.</p>
+          <div className="actions">
+            <button className="secondary" onClick={() => setPage('institutions')}>
+              <Building2 size={14}/> Manage Institutions
+            </button>
+          </div>
         </div>
-      )}
+        <div className="action-queue-card">
+          <h4>Issuer History & Registrations</h4>
+          <p>Inspect certificate registrations, on-chain transaction hashes, and status changes per accredited institution.</p>
+          <div className="actions">
+            <button className="secondary" onClick={() => setPage('admin_issuer_history')}>
+              <Layers3 size={14}/> Inspect Issuer History
+            </button>
+          </div>
+        </div>
+        <div className="action-queue-card">
+          <h4>User Verification History</h4>
+          <p>Search platform verification outcomes, timestamps, user identifiers, and failure reasons with date and status filters.</p>
+          <div className="actions">
+            <button className="secondary" onClick={() => setPage('admin_verifications')}>
+              <Search size={14}/> Search User History
+            </button>
+          </div>
+        </div>
+      </div>
 
       <section className="panel recent-panel">
         <div className="panel-title">
@@ -1329,24 +1356,65 @@ function AdminCertificatesPage() {
 function AdminVerificationsPage() {
   const [rows, setRows] = useState([]);
   const [error, setError] = useState('');
-  const [query, setQuery] = useState('');
-  const [status, setStatus] = useState('all');
+  const [busy, setBusy] = useState(false);
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [result, setResult] = useState('all');
+  const [userId, setUserId] = useState('');
+  const [reference, setReference] = useState('');
+
+  async function fetchLogs() {
+    setBusy(true);
+    setError('');
+    try {
+      const params = new URLSearchParams();
+      if (dateFrom) params.set('date_from', dateFrom);
+      if (dateTo) params.set('date_to', dateTo);
+      if (result && result !== 'all') params.set('result', result);
+      if (userId.trim()) params.set('user_id', userId.trim());
+      if (reference.trim()) params.set('reference', reference.trim());
+      const qs = params.toString() ? '?' + params.toString() : '';
+      const data = await api('/admin/verifications' + qs);
+      setRows(data);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   useEffect(() => {
-    api('/admin/verifications').then(setRows).catch(e => setError(e.message));
+    fetchLogs();
   }, []);
 
-  const filtered = rows.filter(r => {
-    const matchQ = (r.reference || '').toLowerCase().includes(query.toLowerCase());
-    const matchS = status === 'all' || r.status === status;
-    return matchQ && matchS;
-  });
+  function handleFilterSubmit(e) {
+    e.preventDefault();
+    fetchLogs();
+  }
+
+  function handleReset() {
+    setDateFrom('');
+    setDateTo('');
+    setResult('all');
+    setUserId('');
+    setReference('');
+    api('/admin/verifications').then(setRows).catch(e => setError(e.message));
+  }
 
   function exportCsv() {
     saveFile(
-      'authentra-admin-verifications.csv',
-      'Certificate ID,Result,Duration ms,User ID,IP Address,Created At\n' +
-      filtered.map(r => [r.reference, labels[r.status] || r.status, r.duration_ms, r.user_id, r.ip_address, r.created_at].map(v => '"' + String(v || '').replaceAll('"', '""') + '"').join(',')).join('\n'),
+      'authentra-user-verification-history.csv',
+      'User Identifier,Verification Timestamp,Certificate Reference,Verification Result,Issuer Identity,Processing Outcome,Transaction Reference,Failure or Inconclusive Reason\n' +
+      rows.map(r => [
+        r.user_identifier,
+        r.created_at,
+        r.reference || '',
+        labels[r.status] || r.status,
+        r.issuer_name || r.issuer || '',
+        r.processing_outcome || r.category || r.status,
+        r.transaction_hash || '',
+        r.failure_reason || r.message || ''
+      ].map(v => '"' + String(v || '').replaceAll('"', '""') + '"').join(',')).join('\n'),
       'text/csv'
     );
   }
@@ -1354,54 +1422,359 @@ function AdminVerificationsPage() {
   return (
     <>
       <PageHeading
-        eyebrow="SYSTEM AUDIT"
-        title="Platform Verification Logs"
-        text="Inspect global verification activity and outcomes across the platform. Certificate contents remain private."
+        eyebrow="AUDIT & COMPLIANCE"
+        title="User Verification History"
+        text="Search and inspect platform-wide verification history, issuer identities, processing outcomes, and blockchain references under permission-controlled governance. Certificate file contents remain private."
       />
       <ErrorMessage message={error}/>
       <section className="panel">
-        <div className="table-toolbar">
-          <div className="search-field">
-            <Search size={17}/>
-            <input placeholder="Search certificate ID" value={query} onChange={e => setQuery(e.target.value)}/>
+        <form className="history-filter-bar" onSubmit={handleFilterSubmit}>
+          <div className="history-filter-group">
+            <label>From</label>
+            <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}/>
           </div>
-          <select value={status} onChange={e => setStatus(e.target.value)}>
-            <option value="all">All outcomes</option>
-            {Object.entries(labels).map(([v, l]) => <option value={v} key={v}>{l}</option>)}
-          </select>
-          <button className="secondary" onClick={exportCsv}><Download size={16}/>Export CSV</button>
+          <div className="history-filter-group">
+            <label>To</label>
+            <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}/>
+          </div>
+          <div className="history-filter-group">
+            <label>Result</label>
+            <select value={result} onChange={e => setResult(e.target.value)}>
+              <option value="all">All verification results</option>
+              <option value="VERIFIED">Verified (Active on Blockchain)</option>
+              <option value="POSSIBLE_TAMPERING_OR_FILE_MISMATCH">Possible Tampering / Mismatch</option>
+              <option value="NOT_REGISTERED_OR_INCONCLUSIVE">Not Registered / Inconclusive</option>
+              <option value="REVOKED">Revoked Certificate</option>
+              <option value="INVALID_FILE">Invalid Document / Format</option>
+              <option value="ISSUER_NOT_AUTHORIZED">Issuer Not Authorized</option>
+              <option value="VERIFICATION_UNAVAILABLE">Service Unavailable</option>
+            </select>
+          </div>
+          <div className="history-filter-group" style={{flex: 1, minWidth: '130px'}}>
+            <label>User ID / Email</label>
+            <input type="text" placeholder="Search user ID or email" value={userId} onChange={e => setUserId(e.target.value)}/>
+          </div>
+          <div className="history-filter-group" style={{flex: 1, minWidth: '130px'}}>
+            <label>Certificate ID</label>
+            <input type="text" placeholder="Search certificate ID" value={reference} onChange={e => setReference(e.target.value)}/>
+          </div>
+          <div style={{display: 'flex', gap: '8px', alignItems: 'flex-end'}}>
+            <button type="submit" className="primary" disabled={busy} style={{height: '36px', minHeight: '36px'}}>
+              {busy ? <Spinner/> : <Search size={14}/>} Apply Filters
+            </button>
+            <button type="button" className="secondary" onClick={handleReset} disabled={busy} style={{height: '36px', minHeight: '36px'}}>
+              Reset
+            </button>
+            <button type="button" className="secondary" onClick={exportCsv} disabled={!rows.length} style={{height: '36px', minHeight: '36px'}}>
+              <Download size={14}/> Export CSV
+            </button>
+          </div>
+        </form>
+
+        <div style={{padding: '12px 20px', background: '#f8fafc', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px', color: '#64748b'}}>
+          <span>Showing <strong>{rows.length}</strong> matching verification events</span>
+          <span style={{display: 'flex', alignItems: 'center', gap: '6px'}}><ShieldCheck size={14} style={{color: 'var(--green)'}}/> Privacy Protected · Off-chain raw bytes and private keys are never exposed</span>
         </div>
-        {filtered.length ? (
+
+        {rows.length ? (
           <div className="table-scroll">
             <table>
               <thead>
                 <tr>
-                  <th>Certificate ID</th>
-                  <th>Verification Outcome</th>
-                  <th>Processing Time</th>
-                  <th>User ID</th>
-                  <th>Client IP</th>
-                  <th>Checked At</th>
+                  <th>User Identifier</th>
+                  <th>Verification Timestamp</th>
+                  <th>Certificate Reference</th>
+                  <th>Verification Result</th>
+                  <th>Issuer Identity</th>
+                  <th>Processing Outcome</th>
+                  <th>Blockchain Tx Reference</th>
+                  <th>Failure / Inconclusive Reason</th>
                 </tr>
               </thead>
               <tbody>
-                {filtered.map(r => (
+                {rows.map(r => (
                   <tr key={r.id}>
+                    <td><strong>{r.user_identifier}</strong></td>
+                    <td>{fmtTime(r.created_at)}</td>
                     <td><strong className="mono">{r.reference || '—'}</strong></td>
                     <td><Badge status={r.status}/></td>
-                    <td>{r.duration_ms != null ? (r.duration_ms / 1000).toFixed(2) + 's' : '—'}</td>
-                    <td>User #{r.user_id}</td>
-                    <td><code style={{fontSize: '10px'}}>{r.ip_address || '—'}</code></td>
-                    <td>{fmtTime(r.created_at)}</td>
+                    <td>
+                      <div>
+                        <strong>{r.issuer_name || '—'}</strong>
+                        {r.issuer && <code style={{display: 'block', fontSize: '9px', color: '#64748b'}}>{r.issuer.slice(0, 8)}…{r.issuer.slice(-6)}</code>}
+                      </div>
+                    </td>
+                    <td>
+                      <span className="mono" style={{fontSize: '10px'}}>{r.processing_outcome || r.category || r.status}</span>
+                    </td>
+                    <td>
+                      {r.transaction_hash ? (
+                        <a href={r.explorer_url} target="_blank" rel="noreferrer" className="mono" style={{color: 'var(--green,#087d6a)', display: 'inline-flex', alignItems: 'center', gap: '3px'}}>
+                          {r.transaction_hash.slice(0, 14)}… <ArrowUpRight size={11}/>
+                        </a>
+                      ) : (
+                        <span className="muted">—</span>
+                      )}
+                    </td>
+                    <td style={{maxWidth: '240px', fontSize: '11px', overflowWrap: 'anywhere'}}>
+                      {r.failure_reason || r.message || '—'}
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
         ) : (
-          <Empty icon={Search} title="No verification logs found" text="Verification events will appear here."/>
+          <Empty icon={Search} title="No verification records found" text="Try adjusting your filter criteria to locate verification events."/>
         )}
       </section>
+    </>
+  );
+}
+
+function AdminIssuerHistoryPage({initialId}) {
+  const [institutions, setInstitutions] = useState([]);
+  const [selectedId, setSelectedId] = useState(initialId || '');
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    api('/institutions').then(list => {
+      setInstitutions(list);
+      if (!selectedId && list.length > 0) {
+        setSelectedId(list[0].id);
+      }
+    }).catch(e => setError(e.message));
+  }, []);
+
+  useEffect(() => {
+    if (initialId) setSelectedId(initialId);
+  }, [initialId]);
+
+  useEffect(() => {
+    if (!selectedId) return;
+    setLoading(true);
+    setError('');
+    api(`/admin/institutions/${selectedId}/history`)
+      .then(setData)
+      .catch(e => setError(e.message))
+      .finally(() => setLoading(false));
+  }, [selectedId]);
+
+  const inst = data?.institution;
+  const registrations = data?.registrations || [];
+  const auditEvents = data?.audit_events || [];
+
+  return (
+    <>
+      <PageHeading
+        eyebrow="INSTITUTION OVERSIGHT"
+        title="Issuer History & Audit Records"
+        text="Inspect an individual institution's credentials lifecycle, smart contract authorization status, submitted registrations, and cryptographically recorded audit trail."
+      />
+      <ErrorMessage message={error}/>
+
+      <section className="panel" style={{padding: '16px 20px', display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap'}}>
+        <label style={{display: 'flex', flexDirection: 'row', alignItems: 'center', gap: '10px', fontSize: '12px', fontWeight: 600, color: 'var(--dark)'}}>
+          <Building2 size={18} style={{color: 'var(--green)'}}/>
+          Select Institution:
+          <select
+            value={selectedId}
+            onChange={e => setSelectedId(e.target.value)}
+            style={{minWidth: '280px', fontWeight: 500}}
+          >
+            {institutions.map(i => (
+              <option key={i.id} value={i.id}>
+                {i.name} ({i.approval_status}) — {i.institution_reference || i.email}
+              </option>
+            ))}
+          </select>
+        </label>
+        {loading && <Spinner/>}
+      </section>
+
+      {inst && (
+        <>
+          <section className="panel">
+            <div className="issuer-profile-card">
+              <div>
+                <span className="eyebrow">INSTITUTION IDENTITY</span>
+                <h2 style={{fontSize: '22px', margin: '6px 0 12px', color: 'var(--dark)'}}>{inst.name}</h2>
+                <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px', fontSize: '12px'}}>
+                  <div>
+                    <span style={{color: '#64748b', fontSize: '10px', display: 'block', textTransform: 'uppercase'}}>Official Email</span>
+                    <strong>{inst.email}</strong>
+                  </div>
+                  <div>
+                    <span style={{color: '#64748b', fontSize: '10px', display: 'block', textTransform: 'uppercase'}}>Institutional Domain</span>
+                    <strong>{inst.institution_domain || inst.email?.split('@')[1] || '—'}</strong>
+                  </div>
+                  <div>
+                    <span style={{color: '#64748b', fontSize: '10px', display: 'block', textTransform: 'uppercase'}}>Registration Identifier</span>
+                    <strong className="mono">{inst.institution_reference || '—'}</strong>
+                  </div>
+                  <div>
+                    <span style={{color: '#64748b', fontSize: '10px', display: 'block', textTransform: 'uppercase'}}>Application Date</span>
+                    <span>{fmtTime(inst.created_at)}</span>
+                  </div>
+                </div>
+                <div style={{marginTop: '14px'}}>
+                  <span style={{color: '#64748b', fontSize: '10px', display: 'block', textTransform: 'uppercase', marginBottom: '3px'}}>Authorized Ethereum Wallet</span>
+                  <code style={{fontSize: '11px', background: '#f1f5f9', padding: '6px 10px', borderRadius: '5px', display: 'inline-block'}}>{inst.wallet || '—'}</code>
+                </div>
+              </div>
+
+              <div style={{background: '#f8fafc', padding: '18px', borderRadius: '8px', border: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column', gap: '12px'}}>
+                <span className="eyebrow">AUTHORIZATION STATUS</span>
+                <div style={{display: 'flex', flexDirection: 'column', gap: '8px'}}>
+                  <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                    <span style={{fontSize: '11px', color: '#64748b'}}>Governance State:</span>
+                    <Badge status={inst.approval_status === 'APPROVED' ? 'verified' : inst.approval_status === 'PENDING_APPROVAL' ? 'pending' : inst.approval_status === 'SUSPENDED' ? 'suspended' : 'revoked'}>
+                      {inst.approval_status}
+                    </Badge>
+                  </div>
+                  <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                    <span style={{fontSize: '11px', color: '#64748b'}}>Smart Contract Status:</span>
+                    {inst.onchain_approved ? (
+                      <span className="badge onchain"><Layers3 size={11}/> Approved on Chain</span>
+                    ) : (
+                      <span className="badge offchain"><X size={11}/> Not Authorized on Chain</span>
+                    )}
+                  </div>
+                </div>
+                <div className="institution-notes-box" style={{margin: '6px 0 0'}}>
+                  <strong>Review Notes / Policy Reason</strong>
+                  <p style={{margin: 0, fontSize: '11px'}}>{inst.review_notes || 'No review notes on file.'}</p>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          {/* Submitted Certificate Registrations */}
+          <section className="panel">
+            <div className="panel-title">
+              <Layers3 size={20} style={{color: 'var(--green)'}}/>
+              <div>
+                <h3>Submitted Certificate Registrations</h3>
+                <p>On-chain certificate registrations executed by {inst.name}. Registrations are verified directly against the smart contract state.</p>
+              </div>
+              <span className="count-pill">{registrations.length} total</span>
+            </div>
+            {registrations.length ? (
+              <div className="table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Certificate Reference</th>
+                      <th>Registration Timestamp</th>
+                      <th>Recipient / Course</th>
+                      <th>Verification Status</th>
+                      <th>Lifecycle State</th>
+                      <th>Blockchain Transaction</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {registrations.map(r => (
+                      <tr key={r.reference}>
+                        <td><strong className="mono">{r.reference}</strong></td>
+                        <td>{fmtTime(r.created_at || r.registered_at)}</td>
+                        <td>
+                          <div>
+                            <strong>{r.metadata?.recipient_name || '—'}</strong>
+                            <span style={{display: 'block', fontSize: '10px', color: '#64748b'}}>{r.metadata?.course || '—'}</span>
+                          </div>
+                        </td>
+                        <td>
+                          {r.on_chain_verified ? (
+                            <span className="badge onchain"><ShieldCheck size={11}/> ON-CHAIN VERIFIED</span>
+                          ) : (
+                            <span className="badge inconclusive"><AlertTriangle size={11}/> UNVERIFIED</span>
+                          )}
+                        </td>
+                        <td>
+                          <Badge status={r.revoked ? 'revoked' : 'verified'}>
+                            {r.revoked ? 'REVOKED' : 'ACTIVE'}
+                          </Badge>
+                        </td>
+                        <td>
+                          {r.transaction_hash ? (
+                            <a href={r.explorer_url} target="_blank" rel="noreferrer" className="mono" style={{color: 'var(--green,#087d6a)', display: 'inline-flex', alignItems: 'center', gap: '3px'}}>
+                              {r.transaction_hash.slice(0, 16)}… <ArrowUpRight size={11}/>
+                            </a>
+                          ) : (
+                            <span className="muted">—</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <Empty icon={Layers3} title="No certificate registrations found" text="This institution has not yet registered any certificates on the blockchain."/>
+            )}
+          </section>
+
+          {/* Revocations, Status Changes, and Relevant Audit Events */}
+          <section className="panel">
+            <div className="panel-title">
+              <ShieldCheck size={20} style={{color: 'var(--green)'}}/>
+              <div>
+                <h3>Revocations, Status Changes & Relevant Audit Events</h3>
+                <p>Cryptographically logged administrative decisions and smart contract state changes for this institution.</p>
+              </div>
+              <span className="count-pill">{auditEvents.length} events</span>
+            </div>
+            {auditEvents.length ? (
+              <div className="table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Action</th>
+                      <th>Classification</th>
+                      <th>Actor</th>
+                      <th>Target Reference</th>
+                      <th>Transaction Reference</th>
+                      <th>Administrative Reason / Details</th>
+                      <th>Timestamp</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {auditEvents.map(a => (
+                      <tr key={a.id}>
+                        <td><strong className="capitalize">{a.action?.replaceAll('_', ' ')}</strong></td>
+                        <td>
+                          {a.is_onchain ? (
+                            <span className="badge onchain"><Layers3 size={11}/> On-Chain Tx</span>
+                          ) : (
+                            <span className="badge offchain"><ShieldCheck size={11}/> Off-Chain Audit</span>
+                          )}
+                        </td>
+                        <td>{a.actor_name || a.actor_email || (a.user_id ? 'User #' + a.user_id : 'System')}</td>
+                        <td><span className="mono">{a.reference || '—'}</span></td>
+                        <td>
+                          {a.transaction_hash ? (
+                            <a href={a.explorer_url} target="_blank" rel="noreferrer" className="mono" style={{color: 'var(--green)', display: 'inline-flex', alignItems: 'center', gap: '3px'}}>
+                              {a.transaction_hash.slice(0, 14)}… <ArrowUpRight size={11}/>
+                            </a>
+                          ) : (
+                            <span className="muted" style={{fontSize: '10px'}}>— (Off-Chain Event)</span>
+                          )}
+                        </td>
+                        <td style={{maxWidth: '260px', fontSize: '11px', overflowWrap: 'anywhere'}}>{a.details || '—'}</td>
+                        <td>{fmtTime(a.created_at)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <Empty icon={Activity} title="No audit events found" text="No administrative or lifecycle events have been recorded for this institution."/>
+            )}
+          </section>
+        </>
+      )}
     </>
   );
 }
@@ -1461,6 +1834,7 @@ function AdminAuditPage() {
               <thead>
                 <tr>
                   <th>Action</th>
+                  <th>Classification</th>
                   <th>Actor</th>
                   <th>Reference</th>
                   <th>Tx Hash</th>
@@ -1473,9 +1847,22 @@ function AdminAuditPage() {
                 {filtered.map(r => (
                   <tr key={r.id}>
                     <td><strong className="capitalize">{r.action?.replaceAll('_', ' ')}</strong></td>
+                    <td>
+                      {r.transaction_hash ? (
+                        <span className="badge onchain"><Layers3 size={11}/> On-Chain Tx</span>
+                      ) : (
+                        <span className="badge offchain"><ShieldCheck size={11}/> Off-Chain Audit</span>
+                      )}
+                    </td>
                     <td>{r.actor || (r.user_id ? `User #${r.user_id}` : 'System')}</td>
                     <td><span className="mono">{r.reference || '—'}</span></td>
-                    <td><span className="mono">{r.transaction_hash ? r.transaction_hash.slice(0, 14) + '…' : '—'}</span></td>
+                    <td>
+                      {r.transaction_hash ? (
+                        <span className="mono">{r.transaction_hash.slice(0, 14)}…</span>
+                      ) : (
+                        <span className="muted" style={{fontSize: '10px'}}>— (Off-Chain)</span>
+                      )}
+                    </td>
                     <td><code style={{fontSize: '10px'}}>{r.ip_address || '—'}</code></td>
                     <td style={{maxWidth: '220px', fontSize: '10px', overflowWrap: 'anywhere'}}>{r.details || '—'}</td>
                     <td>{fmtTime(r.created_at)}</td>
@@ -1492,12 +1879,15 @@ function AdminAuditPage() {
   );
 }
 
-function InstitutionsPage() {
+function InstitutionsPage({onSelectHistory}) {
   const [rows, setRows] = useState([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [add, setAdd] = useState(false);
   const [notice, setNotice] = useState('');
+  const [tab, setTab] = useState('ALL');
+  const [modalAction, setModalAction] = useState(null);
+  const [adminReason, setAdminReason] = useState('');
 
   async function load() {
     try {
@@ -1509,44 +1899,91 @@ function InstitutionsPage() {
 
   useEffect(() => { load(); }, []);
 
-  async function setStatus(r, status) {
-    setBusy(true); setError(''); setNotice('');
+  function promptAction(institution, targetStatus) {
+    setModalAction({institution, targetStatus});
+    setAdminReason('');
+  }
+
+  async function confirmModalAction(e) {
+    e.preventDefault();
+    if (!modalAction) return;
+    const {institution, targetStatus} = modalAction;
+    setBusy(true);
+    setError('');
+    setNotice('');
     try {
-      const res = await api('/institutions/' + r.id + '/approval', {
+      const res = await api(`/institutions/${institution.id}/approval`, {
         method: 'POST',
-        body: JSON.stringify({status})
+        body: JSON.stringify({
+          status: targetStatus,
+          reason: adminReason.trim() || undefined
+        })
       });
-      setNotice(res.message || `Institution marked as ${status}.`);
+      setNotice(res.message || `Institution marked as ${targetStatus}. Administrative decision and audit reason recorded.`);
+      setModalAction(null);
       await load();
-    } catch(e) {
-      setError(e.message);
+    } catch (err) {
+      setError(err.message);
     } finally {
       setBusy(false);
     }
   }
 
   async function create(e) {
-    e.preventDefault(); setBusy(true); setError('');
+    e.preventDefault();
+    setBusy(true);
+    setError('');
     try {
       const data = Object.fromEntries(new FormData(e.target));
       const result = await api('/institutions', {method: 'POST', body: JSON.stringify(data)});
       setNotice(result.message);
       setAdd(false);
       await load();
-    } catch(e) {
+    } catch (e) {
       setError(e.message);
     } finally {
       setBusy(false);
     }
   }
 
+  const filteredRows = rows.filter(r => {
+    if (tab === 'ALL') return true;
+    if (tab === 'PENDING') return r.approval_status === 'PENDING_APPROVAL';
+    if (tab === 'APPROVED') return r.approval_status === 'APPROVED';
+    if (tab === 'SUSPENDED') return r.approval_status === 'SUSPENDED';
+    if (tab === 'REVOKED') return r.approval_status === 'REVOKED';
+    if (tab === 'REJECTED') return r.approval_status === 'REJECTED';
+    return true;
+  });
+
   return (
     <>
-      <PageHeading eyebrow="TRUST GOVERNANCE" title="Institution Management" text="Verify accredited institutions and configure authorized smart contract issuer wallets.">
+      <PageHeading eyebrow="TRUST GOVERNANCE" title="Institution Access Management" text="Review pending institution applications, authorize or revoke smart contract issuer privileges, record compliance audit reasons, and inspect institution lifecycles.">
         <button className="primary" onClick={() => setAdd(!add)}><Plus size={16}/>Add institution</button>
       </PageHeading>
       <ErrorMessage message={error}/>
       {notice && <p className="success-note"><CheckCircle2 size={16}/>{notice}</p>}
+
+      {/* Filter Tabs */}
+      <div className="filter-tabs" role="tablist">
+        {[
+          ['ALL', `All Institutions (${rows.length})`],
+          ['PENDING', `Pending Review (${rows.filter(r => r.approval_status === 'PENDING_APPROVAL').length})`],
+          ['APPROVED', `Approved Issuers (${rows.filter(r => r.approval_status === 'APPROVED').length})`],
+          ['SUSPENDED', `Suspended (${rows.filter(r => r.approval_status === 'SUSPENDED').length})`],
+          ['REVOKED', `Revoked (${rows.filter(r => r.approval_status === 'REVOKED').length})`],
+          ['REJECTED', `Rejected (${rows.filter(r => r.approval_status === 'REJECTED').length})`]
+        ].map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            className={'filter-tab ' + (tab === key ? 'active' : '')}
+            onClick={() => setTab(key)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
 
       {add && (
         <form className="panel institution-form" onSubmit={create}>
@@ -1566,45 +2003,190 @@ function InstitutionsPage() {
         </form>
       )}
 
-      <div className="institution-grid">
-        {rows.map(r => (
-          <section className="panel institution-card" key={r.id}>
-            <Building2 size={30}/>
-            <Badge status={r.approved ? 'verified' : r.approval_status === 'REJECTED' || r.approval_status === 'REVOKED' ? 'revoked' : 'inconclusive'}>
-              {r.approval_status}
-            </Badge>
-            <h3>{r.name}</h3>
-            <p><strong>Email:</strong> {r.email}</p>
-            <p><strong>Reference:</strong> {r.institution_reference}</p>
-            <p><strong>Verification:</strong> {r.verification_info}</p>
-            <code>{r.wallet}</code>
-
-            <div style={{display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '12px'}}>
-              <button
-                className={r.approved ? 'secondary' : 'primary'}
-                disabled={busy}
-                onClick={() => setStatus(r, r.approved ? 'SUSPENDED' : 'APPROVED')}
-              >
-                {busy ? <Spinner/> : r.approved ? 'Suspend Issuer' : 'Approve Issuer'}
-                <ArrowRight size={15}/>
-              </button>
-              {['REJECTED', 'SUSPENDED', 'REVOKED'].map(st => (
-                <button
-                  key={st}
-                  className="secondary"
-                  disabled={busy || r.approval_status === st}
-                  onClick={() => setStatus(r, st)}
-                >
-                  {st === 'REJECTED' ? 'Reject' : st === 'SUSPENDED' ? 'Suspend' : 'Revoke'}
-                </button>
-              ))}
+      {/* Confirmation Modal for Consequential Actions */}
+      {modalAction && (
+        <div className="admin-modal-backdrop" role="dialog" aria-modal="true">
+          <div className="admin-modal">
+            <div className="admin-modal-header">
+              <ShieldCheck size={22} style={{color: 'var(--green)'}}/>
+              <h3>Confirm Administrative Action</h3>
             </div>
-          </section>
-        ))}
-      </div>
-      <div className="hint">
+            <form onSubmit={confirmModalAction}>
+              <div className="admin-modal-body">
+                <p>
+                  You are changing the authorization status of <strong>{modalAction.institution.name}</strong> ({modalAction.institution.institution_reference}) to <strong className="mono">{modalAction.targetStatus}</strong>.
+                </p>
+
+                {modalAction.targetStatus === 'APPROVED' && (
+                  <div className="admin-modal-impact success">
+                    <strong>Smart Contract Impact:</strong> Approving authorizes this institution's signer wallet (<code>{modalAction.institution.wallet}</code>) on the Ethereum blockchain to register verifiable credentials.
+                  </div>
+                )}
+                {modalAction.targetStatus === 'RESTORED' && (
+                  <div className="admin-modal-impact success">
+                    <strong>Smart Contract Impact:</strong> Restoring re-enables this institution's signer wallet on the Ethereum smart contract.
+                  </div>
+                )}
+                {modalAction.targetStatus === 'SUSPENDED' && (
+                  <div className="admin-modal-impact">
+                    <strong>Smart Contract Impact:</strong> Suspending disables smart contract issuance on-chain. Existing certificates remain on-chain with unchanged status.
+                  </div>
+                )}
+                {modalAction.targetStatus === 'REVOKED' && (
+                  <div className="admin-modal-impact danger">
+                    <strong>Smart Contract Impact:</strong> Revoking revokes the institution's smart contract authorization. This is a consequential governance decision.
+                  </div>
+                )}
+                {modalAction.targetStatus === 'REJECTED' && (
+                  <div className="admin-modal-impact danger">
+                    <strong>Governance Impact:</strong> Rejecting declines the institution's application. No smart contract access is granted.
+                  </div>
+                )}
+
+                <label>
+                  Administrative Reason / Justification (Mandatory for compliance):
+                  <textarea
+                    required
+                    className="reason-textarea"
+                    placeholder="Enter the justification for this administrative decision (recorded in immutable audit log)..."
+                    value={adminReason}
+                    onChange={e => setAdminReason(e.target.value)}
+                    autoFocus
+                  />
+                </label>
+              </div>
+              <div className="admin-modal-footer">
+                <button type="button" className="secondary" onClick={() => setModalAction(null)} disabled={busy}>
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className={modalAction.targetStatus === 'REVOKED' || modalAction.targetStatus === 'REJECTED' ? 'danger' : 'primary'}
+                  disabled={busy || !adminReason.trim()}
+                >
+                  {busy ? <Spinner/> : `Confirm ${modalAction.targetStatus}`}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {filteredRows.length ? (
+        <div className="institution-grid">
+          {filteredRows.map(r => (
+            <section className="panel institution-card" key={r.id}>
+              <div className="institution-card-header">
+                <div className="institution-card-title">
+                  <span className="eyebrow">INSTITUTION ID: {r.institution_reference || '—'}</span>
+                  <h3>{r.name}</h3>
+                  <span>{r.institution_domain || (r.email?.includes('@') ? r.email.split('@')[1] : '—')}</span>
+                </div>
+                <Badge status={r.approval_status === 'APPROVED' ? 'verified' : r.approval_status === 'PENDING_APPROVAL' ? 'pending' : r.approval_status === 'SUSPENDED' ? 'suspended' : 'revoked'}>
+                  {r.approval_status}
+                </Badge>
+              </div>
+
+              <div className="institution-meta-table">
+                <div className="institution-meta-row">
+                  <span className="label">Official Email:</span>
+                  <span className="val">{r.email}</span>
+                </div>
+                <div className="institution-meta-row">
+                  <span className="label">Domain:</span>
+                  <span className="val">{r.institution_domain || (r.email?.includes('@') ? r.email.split('@')[1] : '—')}</span>
+                </div>
+                <div className="institution-meta-row">
+                  <span className="label">Registered On:</span>
+                  <span className="val">{fmtTime(r.created_at)}</span>
+                </div>
+                <div className="institution-meta-row">
+                  <span className="label">Latest Activity:</span>
+                  <span className="val">{r.latest_activity || '—'}</span>
+                </div>
+                <div className="institution-meta-row">
+                  <span className="label">On-Chain State:</span>
+                  <span className="val">
+                    {r.approved ? (
+                      <span className="badge onchain" style={{fontSize: '9px', padding: '2px 6px'}}>Synchronized on Contract</span>
+                    ) : (
+                      <span className="badge offchain" style={{fontSize: '9px', padding: '2px 6px'}}>Not Authorized on Contract</span>
+                    )}
+                  </span>
+                </div>
+              </div>
+
+              {r.review_notes && (
+                <div className="institution-notes-box">
+                  <strong>Review Notes / Policy Reason</strong>
+                  <p style={{margin: 0}}>{r.review_notes}</p>
+                </div>
+              )}
+
+              <code style={{margin: '8px 0 12px'}}>{r.wallet}</code>
+
+              <div className="institution-actions-bar">
+                {r.approval_status === 'PENDING_APPROVAL' && (
+                  <>
+                    <button className="primary" onClick={() => promptAction(r, 'APPROVED')} disabled={busy}>
+                      <Check size={14}/> Approve Application
+                    </button>
+                    <button className="danger" onClick={() => promptAction(r, 'REJECTED')} disabled={busy}>
+                      <X size={14}/> Reject Application
+                    </button>
+                  </>
+                )}
+                {r.approval_status === 'APPROVED' && (
+                  <>
+                    <button className="secondary" onClick={() => promptAction(r, 'SUSPENDED')} disabled={busy}>
+                      <Clock3 size={14}/> Suspend Access
+                    </button>
+                    <button className="danger" onClick={() => promptAction(r, 'REVOKED')} disabled={busy}>
+                      <Ban size={14}/> Revoke Access
+                    </button>
+                  </>
+                )}
+                {r.approval_status === 'SUSPENDED' && (
+                  <>
+                    <button className="primary" onClick={() => promptAction(r, 'RESTORED')} disabled={busy}>
+                      <Check size={14}/> Restore Access
+                    </button>
+                    <button className="danger" onClick={() => promptAction(r, 'REVOKED')} disabled={busy}>
+                      <Ban size={14}/> Revoke Access
+                    </button>
+                  </>
+                )}
+                {r.approval_status === 'REVOKED' && (
+                  <button className="primary" onClick={() => promptAction(r, 'RESTORED')} disabled={busy}>
+                    <Check size={14}/> Restore Access
+                  </button>
+                )}
+                {r.approval_status === 'REJECTED' && (
+                  <button className="primary" onClick={() => promptAction(r, 'APPROVED')} disabled={busy}>
+                    <Check size={14}/> Reconsider & Approve
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => onSelectHistory ? onSelectHistory(r.id) : null}
+                  style={{marginLeft: 'auto'}}
+                >
+                  <Layers3 size={14}/> View Issuer History
+                </button>
+              </div>
+            </section>
+          ))}
+        </div>
+      ) : (
+        <Empty icon={Building2} title="No institutions in this view" text="No institution accounts match the selected filter tab."/>
+      )}
+
+      <div className="hint" style={{marginTop: '20px'}}>
         <LockKeyhole size={18}/>
-        <p>Approval is cryptographically synchronized with the smart contract (setIssuer). Only explicitly approved institutions can issue credentials.</p>
+        <p>
+          Consequential actions require administrative confirmation and a documented policy reason. Approvals are cryptographically synchronized with the smart contract (<code>setIssuer</code>). Institutions cannot approve themselves, and historical blockchain transactions cannot be rewritten.
+        </p>
       </div>
     </>
   );
@@ -1787,6 +2369,7 @@ export default function App() {
   const [mobile, setMobile] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [sessionMessage, setSessionMessage] = useState('');
+  const [selectedIssuerHistoryId, setSelectedIssuerHistoryId] = useState(null);
 
   const canonicalRole = user ? getCanonicalRole(user.role) : null;
 
@@ -1803,8 +2386,8 @@ export default function App() {
       return [
         ['dashboard', 'Admin Overview', Activity],
         ['institutions', 'Institution Governance', Building2],
-        ['admin_certificates', 'Certificate Oversight', Layers3],
-        ['admin_verifications', 'Verification Logs', Search],
+        ['admin_issuer_history', 'Issuer History', Layers3],
+        ['admin_verifications', 'User History', Search],
         ['admin_audit', 'System Audit Trail', ShieldCheck],
         ['architecture', 'System Architecture', Workflow],
         ['evidence', 'Evaluation & Evidence', ChartNoAxesCombined]
@@ -2067,7 +2650,11 @@ export default function App() {
           )}
 
           {canonicalRole === ROLE_SYSTEM_ADMIN && page === 'institutions' && (
-            <InstitutionsPage/>
+            <InstitutionsPage onSelectHistory={id => { setSelectedIssuerHistoryId(id); navigateTo('admin_issuer_history'); }}/>
+          )}
+
+          {canonicalRole === ROLE_SYSTEM_ADMIN && page === 'admin_issuer_history' && (
+            <AdminIssuerHistoryPage initialId={selectedIssuerHistoryId}/>
           )}
 
           {canonicalRole === ROLE_SYSTEM_ADMIN && page === 'admin_certificates' && (

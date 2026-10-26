@@ -85,6 +85,7 @@ def initialize():
             "oauth_id": "TEXT",
             "email_verified": "INTEGER NOT NULL DEFAULT 0",
             "institution_domain": "TEXT",
+            "review_notes": "TEXT",
         }.items():
             if name not in columns:
                 conn.execute(f"ALTER TABLE users ADD COLUMN {name} {definition}")
@@ -108,9 +109,10 @@ def initialize():
               oauth_provider TEXT,
               oauth_id TEXT,
               email_verified INTEGER NOT NULL DEFAULT 0,
-              institution_domain TEXT
+              institution_domain TEXT,
+              review_notes TEXT
             );
-            INSERT INTO users_new(id, email, name, password, role, wallet, created_at, approval_status, institution_reference, verification_info, oauth_provider, oauth_id, email_verified, institution_domain)
+            INSERT INTO users_new(id, email, name, password, role, wallet, created_at, approval_status, institution_reference, verification_info, oauth_provider, oauth_id, email_verified, institution_domain, review_notes)
             SELECT id, email, name, password,
               CASE
                 WHEN role='verifier' THEN 'USER'
@@ -121,7 +123,7 @@ def initialize():
               wallet, created_at,
               COALESCE(approval_status, 'APPROVED'),
               institution_reference, verification_info, oauth_provider, oauth_id,
-              COALESCE(email_verified, 1), institution_domain
+              COALESCE(email_verified, 1), institution_domain, review_notes
             FROM users;
             DROP TABLE users;
             ALTER TABLE users_new RENAME TO users;
@@ -214,6 +216,15 @@ def initialize():
         }.items():
             if name not in audit_cols:
                 conn.execute(f"ALTER TABLE audit ADD COLUMN {name} {definition}")
+
+        conn.execute("CREATE INDEX IF NOT EXISTS verifications_user_idx ON verifications(user_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS verifications_status_idx ON verifications(status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS verifications_category_idx ON verifications(category)")
+        conn.execute("CREATE INDEX IF NOT EXISTS verifications_created_idx ON verifications(created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS verifications_ref_idx ON verifications(reference)")
+        conn.execute("CREATE INDEX IF NOT EXISTS registrations_issuer_idx ON registrations(issuer_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS registrations_created_idx ON registrations(created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS audit_user_ref_idx ON audit(user_id, reference)")
 
 def seed_demo(registry):
     # This explicit development mode is never enabled implicitly in production.

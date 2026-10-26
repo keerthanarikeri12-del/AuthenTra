@@ -85,7 +85,7 @@ async def security_headers(request, call_next):
 
 def public_user(user):
     user_dict = dict(user)
-    keys = ["id", "name", "email", "role", "wallet", "approval_status", "institution_reference", "verification_info", "institution_domain", "email_verified", "oauth_provider"]
+    keys = ["id", "name", "email", "role", "wallet", "approval_status", "institution_reference", "verification_info", "institution_domain", "email_verified", "oauth_provider", "review_notes", "created_at"]
     result = {k: user_dict.get(k) for k in keys if k in user_dict}
     result["role"] = canonical_role(result.get("role"))
     return result
@@ -1030,7 +1030,8 @@ def revoke(reference: str, user: User, request: Request):
 
 class Approval(BaseModel):
     approved: bool | None = None
-    status: Literal["APPROVED", "REJECTED", "SUSPENDED", "REVOKED"] | None = None
+    status: Literal["APPROVED", "REJECTED", "SUSPENDED", "REVOKED", "RESTORED"] | None = None
+    reason: str | None = Field(default=None, max_length=1000)
 
 class Institution(Signup):
     wallet: str = Field(pattern=r"^0x[0-9a-fA-F]{40}$")
@@ -1042,8 +1043,21 @@ def institutions(user: User):
     role(user, ROLE_SYSTEM_ADMIN)
     with connect() as conn:
         rows = [public_user(r) for r in conn.execute("SELECT * FROM users WHERE role IN ('INSTITUTION_ADMIN','institution') ORDER BY id DESC")]
-    chain = registry()
-    return [{**r, "approved": r["approval_status"] == "APPROVED" and chain.approved(r["wallet"])} for r in rows]
+        chain = registry()
+        for r in rows:
+            r["approved"] = r["approval_status"] == "APPROVED" and chain.approved(r["wallet"])
+            latest = conn.execute(
+                "SELECT action, created_at FROM audit WHERE user_id=? OR reference=? ORDER BY id DESC LIMIT 1",
+                (r["id"], r.get("wallet"))
+            ).fetchone()
+            if latest:
+                act = latest["action"].replace("_", " ").capitalize()
+                r["latest_activity"] = f"{act} ({latest['created_at']})"
+                r["latest_activity_at"] = latest["created_at"]
+            else:
+                r["latest_activity"] = f"Application submitted ({r.get('created_at', '—')})"
+                r["latest_activity_at"] = r.get("created_at")
+    return rows
 
 def create_institution(body):
     from web3 import Web3
@@ -1096,30 +1110,116 @@ def add_institution(body: Institution, user: User, request: Request):
 def approve(institution_id: int, body: Approval, user: User, request: Request):
     role(user, ROLE_SYSTEM_ADMIN)
     with connect() as conn:
-        institution = conn.execute("SELECT * FROM users WHERE id=? AND role IN ('INSTITUTION_ADMIN','institution')", (institution_id,)).fetchone()
-    if not institution:
+        row = conn.execute("SELECT * FROM users WHERE id=? AND role IN ('INSTITUTION_ADMIN','institution')", (institution_id,)).fetchone()
+    if not row:
         raise HTTPException(404, "Institution not found.")
-    status = body.status or ("APPROVED" if body.approved is True else "SUSPENDED" if body.approved is False else None)
-    if status is None:
-        raise HTTPException(422, "Supply an approval status.")
+    institution = dict(row)
+
+    if user["id"] == institution_id or (user.get("wallet") and institution.get("wallet") and user.get("wallet", "").lower() == institution.get("wallet", "").lower()):
+        raise HTTPException(403, "Institutions cannot approve or alter their own authorization.")
+
+    status = body.status
+    if status == "RESTORED":
+        status = "APPROVED"
+    elif not status and body.approved is not None:
+        status = "APPROVED" if body.approved else "SUSPENDED"
+
+    if status not in ("APPROVED", "REJECTED", "SUSPENDED", "REVOKED"):
+        raise HTTPException(422, "Supply a valid approval status (APPROVED, REJECTED, SUSPENDED, REVOKED, or RESTORED).")
+
+    reason = (body.reason or "").strip()
+    if not reason:
+        reason = f"Administrative decision by {user.get('email', 'admin')}: set status to {status}."
+
     chain = registry()
-    approved = status == "APPROVED"
+    approved = (status == "APPROVED")
     if approved and institution["wallet"] not in chain.keys:
         raise HTTPException(409, "Configure the institution server-side signer before approval.")
+
     transaction = safe_chain_action(lambda: chain.set_issuer(institution["wallet"], approved))
+
     ip = request.client.host if request.client else "local"
     with connect() as conn:
-        conn.execute("UPDATE users SET approval_status=? WHERE id=?", (status, institution_id))
+        conn.execute("UPDATE users SET approval_status=?, review_notes=? WHERE id=?", (status, reason, institution_id))
         audit(
             conn,
             user["id"],
             "issuer_" + status.lower(),
             reference=institution["wallet"],
-            transaction_hash=transaction["transaction_hash"],
-            details=f"Admin {user['email']} set institution '{institution['name']}' (ID: {institution_id}) to {status}",
+            transaction_hash=transaction.get("transaction_hash"),
+            details=f"Admin {user['email']} set institution '{institution['name']}' (ID: {institution_id}) to {status}. Reason: {reason}",
             ip_address=ip
         )
-    return {"approved": approved, "approval_status": status, **transaction}
+    return {
+        "approved": approved,
+        "approval_status": status,
+        "review_notes": reason,
+        "institution_id": institution_id,
+        "institution_name": institution["name"],
+        **transaction
+    }
+
+@app.get("/api/admin/institutions/{institution_id}/history")
+def admin_institution_history(institution_id: int, user: User):
+    role(user, ROLE_SYSTEM_ADMIN)
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM users WHERE id=? AND role IN ('INSTITUTION_ADMIN','institution')", (institution_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "Institution not found.")
+        inst = dict(row)
+        inst_data = public_user(inst)
+        chain = registry()
+        wallet = inst.get("wallet")
+        try:
+            onchain_ok = chain.approved(wallet) if wallet else False
+        except Exception:
+            onchain_ok = False
+        inst_data["onchain_approved"] = onchain_ok
+        inst_data["approved"] = inst["approval_status"] == "APPROVED" and onchain_ok
+
+        # Certificate registrations submitted by that institution
+        registrations = [dict(r) for r in conn.execute(
+            """
+            SELECT r.*
+            FROM registrations r
+            WHERE r.issuer_id=?
+            ORDER BY r.created_at DESC
+            """,
+            (institution_id,)
+        )]
+        for reg in registrations:
+            rec = chain.lookup(reg["reference"])
+            reg["revoked"] = rec["revoked"] if rec else False
+            reg["on_chain_verified"] = rec is not None and rec["file_hash"].lower() == reg["file_hash"].lower()
+            reg["explorer_url"] = chain.get_explorer_url(reg.get("transaction_hash"))
+            reg["status_label"] = "REVOKED" if reg["revoked"] else ("ACTIVE" if reg["on_chain_verified"] else "UNVERIFIED")
+            if reg.get("metadata"):
+                try:
+                    reg["metadata"] = json.loads(reg["metadata"])
+                except Exception:
+                    pass
+
+        # Revocations, status changes, and relevant audit events
+        audit_events = [dict(a) for a in conn.execute(
+            """
+            SELECT a.*, u.name AS actor_name, u.email AS actor_email
+            FROM audit a
+            LEFT JOIN users u ON u.id = a.user_id
+            WHERE a.user_id=? OR (a.reference IS NOT NULL AND a.reference=?) OR a.reference IN (SELECT reference FROM registrations WHERE issuer_id=?)
+            ORDER BY a.id DESC LIMIT 200
+            """,
+            (institution_id, inst.get("wallet") or "", institution_id)
+        )]
+        for event in audit_events:
+            tx = event.get("transaction_hash")
+            event["explorer_url"] = chain.get_explorer_url(tx) if tx else None
+            event["is_onchain"] = bool(tx)
+
+        return {
+            "institution": inst_data,
+            "registrations": registrations,
+            "audit_events": audit_events
+        }
 
 @app.get("/api/audit")
 def audit_log(user: User):
@@ -1149,19 +1249,80 @@ def audit_log(user: User):
             )]
 
 @app.get("/api/admin/verifications")
-def admin_verifications(user: User):
+def admin_verifications(
+    user: User,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    result: str | None = None,
+    user_id: str | None = None,
+    reference: str | None = None
+):
     role(user, ROLE_SYSTEM_ADMIN)
+    chain = registry()
+    query = """
+        SELECT v.id, v.user_id, u.name AS user_name, u.email AS user_email,
+               v.reference, v.status, v.category, v.file_hash, v.registered_hash,
+               COALESCE(v.issuer, r_iss.wallet) AS issuer,
+               COALESCE(iss.name, r_iss.name) AS issuer_name,
+               r.transaction_hash,
+               v.duration_ms, v.ai_status, v.message, v.created_at
+        FROM verifications v
+        LEFT JOIN users u ON u.id = v.user_id
+        LEFT JOIN registrations r ON r.reference = v.reference
+        LEFT JOIN users r_iss ON r_iss.id = r.issuer_id
+        LEFT JOIN users iss ON lower(iss.wallet) = lower(v.issuer)
+        WHERE 1=1
+    """
+    params = []
+    if date_from:
+        query += " AND v.created_at >= ?"
+        params.append(date_from)
+    if date_to:
+        query += " AND v.created_at <= ?"
+        params.append(date_to + " 23:59:59" if len(date_to) == 10 else date_to)
+    if result and result != "all":
+        query += " AND (v.status = ? OR v.category = ?)"
+        params.extend([result, result])
+    if user_id:
+        query += " AND (CAST(v.user_id AS TEXT) LIKE ? OR lower(u.email) LIKE ? OR lower(u.name) LIKE ?)"
+        term = f"%{user_id.lower().strip()}%"
+        params.extend([term, term, term])
+    if reference:
+        query += " AND lower(v.reference) LIKE ?"
+        params.append(f"%{reference.lower().strip()}%")
+
+    query += " ORDER BY v.id DESC LIMIT 500"
+
     with connect() as conn:
-        return [dict(r) for r in conn.execute(
-            """
-            SELECT v.id, v.user_id, u.name AS user_name, u.email AS user_email,
-                   v.reference, v.status, v.category, v.file_hash, v.duration_ms,
-                   v.ai_status, v.created_at
-            FROM verifications v
-            LEFT JOIN users u ON u.id = v.user_id
-            ORDER BY v.id DESC LIMIT 500
-            """
-        )]
+        rows = [dict(r) for r in conn.execute(query, params)]
+
+    for row in rows:
+        email_part = f" ({row['user_email']})" if row.get("user_email") else ""
+        row["user_identifier"] = f"User #{row['user_id']}{email_part}" if row.get("user_id") else "Anonymous / Unauthenticated"
+        row["explorer_url"] = chain.get_explorer_url(row.get("transaction_hash"))
+        row["verification_timestamp"] = row.get("created_at")
+        row["processing_outcome"] = row.get("category") or row.get("status")
+        row["transaction_reference"] = row.get("transaction_hash")
+        if not row.get("issuer_name") and row.get("issuer"):
+            row["issuer_name"] = f"Wallet {row['issuer'][:8]}...{row['issuer'][-6:]}"
+        if not row.get("message"):
+            if row.get("category") == "VERIFIED":
+                row["message"] = "Certificate verified and active on blockchain"
+            elif row.get("category") == "POSSIBLE_TAMPERING_OR_FILE_MISMATCH":
+                row["message"] = "File hash does not match registered on-chain digest"
+            elif row.get("category") == "REVOKED":
+                row["message"] = "Certificate was revoked by the issuing authority"
+            elif row.get("category") == "NOT_REGISTERED_OR_INCONCLUSIVE":
+                row["message"] = "Certificate reference not found on the blockchain registry"
+            elif row.get("category") == "INVALID_FILE":
+                row["message"] = "Unsupported file format, corrupted payload, or unreadable document"
+            elif row.get("category") == "ISSUER_NOT_AUTHORIZED":
+                row["message"] = "Issuing institution is not authorized on the smart contract"
+            else:
+                row["message"] = "Verification could not be conclusively determined"
+        row["failure_reason"] = row["message"] if row.get("category") != "VERIFIED" else None
+
+    return rows
 
 @app.get("/api/admin/certificates")
 def admin_certificates(user: User):
