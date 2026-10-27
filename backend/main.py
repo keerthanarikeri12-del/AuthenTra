@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
-from .core import CATEGORY_ACTIONS, CATEGORY_MAP, decide, normalize_reference
+from .core import CATEGORY_ACTIONS, CATEGORY_MAP, decide, normalize_reference, reference_hash
 from .documents import MAX_BYTES, analyze
 from .registry import Registry, UncertainTransactionError
 from . import uploads, domains, email_verification, auth_oauth
@@ -31,7 +31,7 @@ LABELS = {
     "VERIFIED": "Verified",
     "possible_tampering": "Possible Tampering",
     "tampering_detected": "Tampering Detected",
-    "TAMPERING_DETECTED": "Tampering Detected",
+    "TAMPERING_DETECTED": "Possible Tampering or File Mismatch",
     "POSSIBLE_TAMPERING_OR_FILE_MISMATCH": "Possible Tampering or File Mismatch",
     "not_registered": "Not Registered",
     "NOT_REGISTERED": "Not Registered",
@@ -978,12 +978,19 @@ def _register_document(data, kind, reference, user, metadata_override=None):
                         "on_chain_verified": True,
                         "idempotent": True,
                     }
-            dup_file = conn.execute("SELECT reference FROM registrations WHERE issuer_id=? AND file_hash=?", (user["id"], digest)).fetchone()
-            if dup_file:
-                raise HTTPException(409, f"This file is already registered by your institution under ID {dup_file['reference']}.")
-            raise HTTPException(409, "This certificate ID already exists. IDs cannot be overwritten or reused.")
+                elif on_chain is None:
+                    # Database record exists from prior session, but not yet present on active blockchain.
+                    # Proceed to register on-chain and sync the database record.
+                    pass
+                else:
+                    raise HTTPException(409, "This certificate ID already exists on the blockchain with different parameters.")
+            else:
+                dup_file = conn.execute("SELECT reference FROM registrations WHERE issuer_id=? AND file_hash=? AND reference != ?", (user["id"], digest, reference)).fetchone()
+                if dup_file:
+                    raise HTTPException(409, f"This file is already registered by your institution under ID {dup_file['reference']}.")
+                raise HTTPException(409, "This certificate ID already exists. IDs cannot be overwritten or reused.")
 
-        dup_file = conn.execute("SELECT reference FROM registrations WHERE issuer_id=? AND file_hash=?", (user["id"], digest)).fetchone()
+        dup_file = conn.execute("SELECT reference FROM registrations WHERE issuer_id=? AND file_hash=? AND reference != ?", (user["id"], digest, reference)).fetchone()
         if dup_file:
             raise HTTPException(409, f"This file is already registered by your institution under ID {dup_file['reference']}.")
 

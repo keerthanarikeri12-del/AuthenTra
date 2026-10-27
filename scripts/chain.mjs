@@ -46,7 +46,8 @@ try {
 }
 const accounts = Object.entries(server.provider.getInitialAccounts());
 const provider = new ethers.JsonRpcProvider('http://127.0.0.1:8545');
-const owner = new ethers.Wallet(accounts[0][1].secretKey, provider);
+const wallet = new ethers.Wallet(accounts[0][1].secretKey, provider);
+const owner = new ethers.NonceManager(wallet);
 let previous = null;
 try { previous = JSON.parse(fs.readFileSync('.local/chain.json', 'utf8')); } catch {}
 let address = previous?.contractAddress;

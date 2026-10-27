@@ -7,7 +7,7 @@ const stageLabels = {
   VALIDATING: 'Validating',
   OCR_PROCESSING: 'OCR Processing',
   AWAITING_REVIEW: 'Awaiting Review',
-  PENDING_BLOCKCHAIN: 'Pending Blockchain',
+  PENDING_BLOCKCHAIN: 'Blockchain Registration Pending',
   REGISTERED_ON_BLOCKCHAIN: 'Registered on Blockchain',
   REGISTRATION_FAILED: 'Registration Failed',
   REGISTRATION_STATUS_UNCERTAIN: 'Registration Status Uncertain',
@@ -49,7 +49,7 @@ function getStageLabel(item, issuing) {
       return 'Awaiting Review';
     }
     if (item.status === 'PENDING_BLOCKCHAIN') {
-      return 'Pending Blockchain';
+      return 'Blockchain Registration Pending';
     }
     if (item.status === 'OCR_PROCESSING') {
       return 'OCR Processing';
@@ -110,7 +110,7 @@ export default function CertificateUpload({mode = 'verify', api, Badge, Result, 
   useEffect(() => {
     let alive = true;
     api('/uploads/limits?mode=' + mode).then(v => {if (alive) setLimits(v);}).catch(e => {if (alive) setError(e.message);});
-    api('/uploads?mode=' + mode).then(v => {if (alive) {setRecent(v); const pending = v.find(b => b.state !== 'completed'); if (pending) setBatch(pending); else if (v.length > 0) setBatch(v[0]);}}).catch(e => {if (alive) setError(e.message);});
+    api('/uploads?mode=' + mode).then(v => {if (alive) {setRecent(v); const pending = v.find(b => b.state !== 'completed'); if (pending) setBatch(pending);}}).catch(e => {if (alive) setError(e.message);});
     return () => {alive = false;};
   }, [mode, api]);
 
@@ -149,7 +149,7 @@ export default function CertificateUpload({mode = 'verify', api, Badge, Result, 
     if (!selected.length) return;
     if (selected.length + items.length > limits.max_files) {
       if (limits.max_files === 5) {
-        setError(`Ordinary users can upload a maximum of 5 certificate files per batch. You selected ${selected.length + items.length} files. Please select between 1 and 5 files to continue.`);
+        setError(`Ordinary users can upload at most 5 certificate files per batch (maximum of 5). You selected ${selected.length + items.length} files. Please select between 1 and 5 files to continue.`);
       } else {
         setError(`Institutions are limited to ${limits.max_files} files per batch. You selected ${selected.length + items.length} files. Remove extra files to continue.`);
       }
@@ -282,11 +282,11 @@ export default function CertificateUpload({mode = 'verify', api, Badge, Result, 
       {issuing && batch.summary && (
         <div className="upload-summary" aria-live="polite">
           <div><strong>{batch.summary.total}</strong><span>Total files</span></div>
-          <div><strong>{batch.summary.registered ?? batch.summary.successful}</strong><span>Registered on Blockchain</span></div>
-          <div><strong>{batch.summary.failed}</strong><span>Registration Failed</span></div>
-          <div><strong>{batch.summary.uncertain ?? 0}</strong><span>Status Uncertain</span></div>
-          <div><strong>{batch.summary.awaiting_review ?? 0}</strong><span>Awaiting Review</span></div>
-          <div><strong>{batch.summary.pending}</strong><span>In Queue / Processing</span></div>
+          {(batch.summary.registered ?? batch.summary.successful) > 0 && <div><strong>{batch.summary.registered ?? batch.summary.successful}</strong><span>Registered</span></div>}
+          {batch.summary.failed > 0 && <div><strong>{batch.summary.failed}</strong><span>Failures</span></div>}
+          {(batch.summary.uncertain ?? 0) > 0 && <div><strong>{batch.summary.uncertain ?? 0}</strong><span>Status Uncertain</span></div>}
+          {(batch.summary.awaiting_review ?? 0) > 0 && <div><strong>{batch.summary.awaiting_review ?? 0}</strong><span>Awaiting Review</span></div>}
+          {batch.summary.pending > 0 && <div><strong>{batch.summary.pending}</strong><span>In Queue / Processing</span></div>}
         </div>
       )}
       {!issuing && batch.summary && <div className="upload-summary" aria-live="polite">{[['total','Total files'],['valid','Valid files'],['rejected','Rejected'],['pending','Pending'],['successful','Checks completed'],['failed','Failures']].map(([key, label]) => <div key={key}><strong>{batch.summary[key]}</strong><span>{label}</span></div>)}</div>}

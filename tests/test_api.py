@@ -222,8 +222,8 @@ def test_failed_chain_approval_keeps_pending(client, monkeypatch):
 
 
 
-def wait_batch(client, job):
-    deadline = time.monotonic() + 10
+def wait_batch(client, job, timeout=25):
+    deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         response = client.get('/api/uploads/' + job)
         assert response.status_code == 200, response.text

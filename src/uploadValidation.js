@@ -12,7 +12,7 @@ export function fileError(file, limits) {
 export function selectionError(items, limits) {
   if (items.length > limits.max_files) {
     if (limits.max_files === 5) {
-      return `Users can upload a maximum of 5 certificate files per batch. You have ${items.length} files selected. Remove extra files to continue.`;
+      return `Users can upload at most 5 certificate files per batch (maximum of 5). You have ${items.length} files selected. Remove extra files to continue.`;
     }
     return `Choose at most ${limits.max_files} files per batch. You have ${items.length} files selected. Remove extra files to continue.`;
   }

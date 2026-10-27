@@ -24,8 +24,8 @@ const labels = {
   verified: 'Verified',
   VERIFIED: 'Verified',
   possible_tampering: 'Possible Tampering',
-  tampering_detected: 'Tampering Detected',
-  TAMPERING_DETECTED: 'Tampering Detected',
+  tampering_detected: 'Possible Tampering or File Mismatch',
+  TAMPERING_DETECTED: 'Possible Tampering or File Mismatch',
   POSSIBLE_TAMPERING_OR_FILE_MISMATCH: 'Possible Tampering or File Mismatch',
   not_registered: 'Not Registered',
   NOT_REGISTERED: 'Not Registered',
@@ -336,6 +336,7 @@ function Login({onLogin, health, sessionMessage}) {
                 disabled={busy}
                 className={accountType === id ? 'primary' : 'secondary'}
                 aria-pressed={accountType === id}
+                aria-label={id === 'institution' ? 'Institution Login' : label}
                 onClick={() => {
                   setAccountType(id);
                   setSignup(false);
@@ -548,7 +549,7 @@ function Login({onLogin, health, sessionMessage}) {
                 )}
 
                 <label>
-                  {accountType === 'institution' ? 'Official institutional email' : accountType === 'admin' ? 'Administrator email' : 'Email address'}
+                  {accountType === 'institution' ? 'Official email address' : accountType === 'admin' ? 'Administrator email' : 'Email address'}
                   <input
                     type="email"
                     required
@@ -685,10 +686,10 @@ function Result({result: r, autoScroll = true}) {
         <div style={{flex: 1}}>
           <div style={{display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginBottom: '6px'}}>
             <span className="eyebrow">VERIFICATION RESULT</span>
-            <Badge status={badgeClass}>{r.label || labels[category] || category}</Badge>
+            <Badge status={badgeClass}>{(r.status === 'possible_tampering' || category === 'TAMPERING_DETECTED' || category === 'POSSIBLE_TAMPERING_OR_FILE_MISMATCH') ? 'Possible Tampering or File Mismatch' : (r.label || labels[category] || category)}</Badge>
             {r.reference && <span className="reference-pill mono" style={{background: 'var(--line,#e5ebed)', padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 600}}>ID: {r.reference}</span>}
           </div>
-          <h2>{r.label || labels[category] || category}</h2>
+          <h2>{(r.status === 'possible_tampering' || category === 'TAMPERING_DETECTED' || category === 'POSSIBLE_TAMPERING_OR_FILE_MISMATCH') ? 'Possible Tampering or File Mismatch' : (r.label || labels[category] || category)}</h2>
           <p className="result-explanation" style={{marginTop: '4px', fontSize: '13px', lineHeight: 1.6}}>{r.message}</p>
         </div>
         <button className="secondary small-button" onClick={() => saveFile('authentra-verification-' + (r.reference || 'report') + '.json', JSON.stringify(r, null, 2))}>
@@ -1052,6 +1053,9 @@ function RegistryPage({user, onChange}) {
     <>
       <PageHeading eyebrow="ISSUER WORKSPACE" title="Certificate Registry" text="Manage credentials issued by your institution. Revoke compromised or superseded credentials permanently."/>
       <ErrorMessage message={error}/>
+      <div className="verify-layout" style={{marginBottom: '28px'}}>
+        <CertificateUpload mode="register" api={api} Badge={Badge} Result={Result} onChange={() => { load(); onChange?.(); }}/>
+      </div>
       <section className="panel">
         <div className="panel-title">
           <h3>Issued Certificates</h3>
@@ -2380,7 +2384,7 @@ export default function App() {
   function getDefaultPage(role) {
     const c = getCanonicalRole(role);
     if (c === ROLE_SYSTEM_ADMIN) return 'dashboard';
-    if (c === ROLE_INSTITUTION_ADMIN) return 'dashboard';
+    if (c === ROLE_INSTITUTION_ADMIN) return 'registry';
     return 'verify';
   }
 
@@ -2399,9 +2403,9 @@ export default function App() {
     }
     if (c === ROLE_INSTITUTION_ADMIN) {
       return [
+        ['registry', 'Certificate Registry', Layers3],
         ['dashboard', 'Institution Dashboard', Building2],
         ['register', 'Register Credentials', UploadCloud],
-        ['registry', 'Issued Registry', Layers3],
         ['audit', 'Activity Log', Activity],
         ['architecture', 'System Architecture', Workflow],
         ['evidence', 'Evaluation & Evidence', ChartNoAxesCombined]
