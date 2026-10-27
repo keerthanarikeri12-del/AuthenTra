@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 from .core import CATEGORY_ACTIONS, CATEGORY_MAP, decide, normalize_reference, reference_hash
-from .documents import MAX_BYTES, analyze
+from .documents import MAX_BYTES, analyze, model_ready
 from .registry import Registry, UncertainTransactionError
 from . import uploads, domains, email_verification, auth_oauth
 from .storage import ROOT, audit, connect, initialize, password_hash, password_matches, seed_demo, ROLE_USER, ROLE_INSTITUTION_ADMIN, ROLE_SYSTEM_ADMIN, canonical_role
@@ -424,14 +424,22 @@ def health():
         net_info = chain.get_network_info()
     except Exception:
         connected, address, net_info = False, None, {"network_name": "Local development · chain 1337" if DEMO else "Configured Ethereum network", "chain_id": 1337 if DEMO else None}
+    advisory_ready = model_ready()
+    try:
+        with connect() as conn:
+            conn.execute("SELECT id FROM users LIMIT 1").fetchone()
+        database_ready = True
+    except Exception:
+        database_ready = False
     return {
-        "status": "ready" if connected else "degraded",
+        "status": "ready" if connected and advisory_ready and database_ready else "degraded",
+        "database": database_ready,
         "blockchain": connected,
         "network": net_info["network_name"],
         "chain_id": net_info.get("chain_id"),
         "contract": address,
         "demo": DEMO,
-        "model": (ROOT / ".local/model.joblib").exists()
+        "model": advisory_ready
     }
 
 @app.get("/api/dashboard")

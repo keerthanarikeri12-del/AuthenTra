@@ -1,7 +1,7 @@
 """Live Blockchain Integration Tests for AuthenTra.
 
 These tests execute REAL Web3 transactions against a live Ethereum-compatible
-blockchain node (Ganache on http://127.0.0.1:8545) running the deployed
+disposable blockchain node (Ganache on a temporary loopback port) running the deployed
 AuthenTraRegistry.sol smart contract.
 
 Mocked tests are in tests/test_registration_workflow.py and tests/test_verification_workflow.py.
@@ -25,56 +25,6 @@ ROOT = Path(__file__).resolve().parents[1]
 # Ensure AUTHENTRA_DEMO is active so Registry loads .local/chain.json
 os.environ["AUTHENTRA_DEMO"] = "1"
 
-
-def get_node_binary():
-    cmd = shutil.which("node")
-    if cmd:
-        return cmd
-    bundled = Path(os.environ.get("USERPROFILE", "")) / ".cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe"
-    if bundled.exists():
-        return str(bundled)
-    return "node"
-
-
-def is_chain_alive():
-    try:
-        from web3 import Web3
-        w3 = Web3(Web3.HTTPProvider("http://127.0.0.1:8545", request_kwargs={"timeout": 2}))
-        return w3.is_connected()
-    except Exception:
-        return False
-
-
-@pytest.fixture(scope="module")
-def live_chain():
-    """Ensure a live Ganache blockchain node is active and return the Registry instance."""
-    chain_proc = None
-    if not is_chain_alive():
-        node_bin = get_node_binary()
-        chain_proc = subprocess.Popen(
-            [node_bin, "scripts/chain.mjs"],
-            cwd=str(ROOT),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
-        # Wait up to 20 seconds for readiness
-        for _ in range(40):
-            time.sleep(0.5)
-            if is_chain_alive() and (ROOT / ".local/chain.json").exists():
-                break
-        else:
-            if chain_proc:
-                chain_proc.terminate()
-            pytest.skip("Could not connect to live local blockchain node on http://127.0.0.1:8545.")
-
-    from backend.registry import Registry
-    reg = Registry()
-    assert reg.health(), "Live blockchain health check failed: contract not available at RPC."
-    yield reg
-
-    if chain_proc:
-        chain_proc.terminate()
-        chain_proc.wait(timeout=5)
 
 
 def create_test_pdf(reference: str, text: str = "Test Certificate") -> bytes:
@@ -167,32 +117,16 @@ class TestLiveBlockchainDirect:
 
     def test_live_unapproved_issuer_rejection(self, live_chain):
         """Unapproved institution cannot register certificates on the live EVM."""
-        from eth_account import Account
-        unapproved = Account.create()
-        # Fund the unapproved account so lack of gas does not mask authorization check
-        funder = live_chain.owner
-        tx = {
-            "from": funder,
-            "to": unapproved.address,
-            "value": live_chain.w3.to_wei(0.1, "ether"),
-            "nonce": live_chain.w3.eth.get_transaction_count(funder, "pending"),
-            "gas": 21000,
-            "gasPrice": live_chain.w3.eth.gas_price,
-            "chainId": 1337,
-        }
-        signed = live_chain.w3.eth.account.sign_transaction(tx, live_chain.keys[funder])
-        tx_hash = live_chain.w3.eth.send_raw_transaction(signed.raw_transaction)
-        live_chain.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=10)
-
-        # Register unapproved key in registry signers
-        live_chain.keys[unapproved.address] = unapproved.key.hex()
+        # Ganache already provides an unapproved third demo signer; no funding transfer.
+        unapproved = [address for address in live_chain.keys
+                      if address != live_chain.owner and not live_chain.approved(address)][0]
 
         ref = f"AT-UNAPPROVED-{uuid.uuid4().hex[:8]}"
         dummy_hash = hashlib.sha256(b"unauthorized").hexdigest()
 
         # The contract call must revert
-        with pytest.raises(Exception):
-            live_chain.register(ref, dummy_hash, unapproved.address)
+        with pytest.raises(Exception, match="Approved issuer only"):
+            live_chain.register(ref, dummy_hash, unapproved)
 
     def test_live_certificate_revocation(self, live_chain):
         """An authorized issuer can revoke their registered certificate on the live blockchain."""

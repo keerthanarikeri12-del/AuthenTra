@@ -21,7 +21,7 @@ class Registry:
         if demo:
             chain_file = ROOT / ".local/chain.json"
             if not chain_file.exists():
-                raise RuntimeError("Local demo blockchain configuration (.local/chain.json) is missing. Run scripts/setup_demo_chain.mjs first.")
+                raise RuntimeError("Local demo blockchain configuration (.local/chain.json) is missing. Run chain.mjs (node scripts/chain.mjs) first.")
             config = json.loads(chain_file.read_text())
             self.keys = {Web3.to_checksum_address(i["address"]): i["key"] for i in config["issuers"]}
             self.keys[Web3.to_checksum_address(config["ownerAddress"])] = config["ownerKey"]
@@ -107,7 +107,7 @@ class Registry:
         try:
             chain_id = self.w3.eth.chain_id
         except Exception:
-            chain_id = 1337
+            chain_id = None
         networks = {
             1: ("Ethereum Mainnet", "https://etherscan.io/tx/{tx_hash}"),
             11155111: ("Sepolia Testnet", "https://sepolia.etherscan.io/tx/{tx_hash}"),
@@ -116,7 +116,7 @@ class Registry:
             31337: ("Local Hardhat/Ganache", None),
         }
         custom_explorer = os.getenv("EXPLORER_TX_URL")
-        name, default_explorer = networks.get(chain_id, (f"Chain {chain_id}", None))
+        name, default_explorer = networks.get(chain_id, (f"Chain {chain_id}" if chain_id is not None else "Blockchain unavailable", None))
         explorer_template = custom_explorer or default_explorer
         return {
             "chain_id": chain_id,

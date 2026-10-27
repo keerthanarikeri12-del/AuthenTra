@@ -53,11 +53,8 @@ def create_test_image(text: str = "Test PNG Certificate") -> bytes:
 
 
 @pytest.fixture(scope="module")
-def live_registry():
-    from backend.registry import Registry
-    reg = Registry()
-    assert reg.health(), "Live blockchain node is not responding at configured RPC endpoint."
-    return reg
+def live_registry(live_chain):
+    return live_chain
 
 
 @pytest.fixture

@@ -15,6 +15,17 @@ MAX_BYTES = 10 * 1024 * 1024
 Image.MAX_IMAGE_PIXELS = 20_000_000
 FEATURE_NAMES = ["text_length", "line_count", "digit_fraction", "uppercase_fraction", "mean_word_length", "reference_present", "name_present", "course_present", "valid_date", "suspicious_terms"]
 
+def model_ready():
+    """Check that the advisory artifact can actually load and predict."""
+    try:
+        import joblib
+        model = joblib.load(ROOT / ".local/model.joblib")
+        probabilities = model.predict_proba(np.zeros((1, len(FEATURE_NAMES))))
+        return probabilities.shape == (1, 2) and bool(np.isfinite(probabilities).all())
+    except Exception:
+        return False
+
+
 def extract_fields(text):
     patterns = {
         "reference": r"(?:(?:certificate[ \t]*(?:id|reference|no\.?|number)|credential[ \t]*id|qr(?:[ \t]*code)?[ \t]*(?:link|payload|id|ref)?)[ \t]*[:#-]?[ \t]*|(?:(?:verify|credential|cert|qr)/|\?ref=))([A-Za-z0-9][A-Za-z0-9_-]{2,63})",
