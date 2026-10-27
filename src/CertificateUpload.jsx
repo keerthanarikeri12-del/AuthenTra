@@ -101,10 +101,19 @@ export default function CertificateUpload({mode = 'verify', api, Badge, Result, 
   const [checking, setChecking] = useState(false), [sending, setSending] = useState(false), [progress, setProgress] = useState(0);
   const [drag, setDrag] = useState(false), [batch, setBatch] = useState(null), [recent, setRecent] = useState([]), [pollError, setPollError] = useState('');
   const [reviewing, setReviewing] = useState(false);
+  const [previewSample, setPreviewSample] = useState(null);
   const input = useRef(), mounted = useRef(true), sendingRef = useRef(false), checkRef = useRef(false), request = useRef(), changed = useRef(onChange);
   changed.current = onChange;
   const active = batch && batch.state !== 'completed';
   const busy = checking || sending || active || reviewing;
+
+  useEffect(() => {
+    function onKeyDown(e) {
+      if (e.key === 'Escape') setPreviewSample(null);
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   useEffect(() => {mounted.current = true; return () => {mounted.current = false; request.current?.abort();};}, []);
   useEffect(() => {
@@ -249,7 +258,99 @@ export default function CertificateUpload({mode = 'verify', api, Badge, Result, 
         <button type="button" className="secondary" disabled={busy || !limits} onClick={() => input.current.click()}>Browse Files</button>
         <small>{limits ? `${limits.max_files} files maximum · ${formatBytes(limits.max_file_bytes)} per file · ${formatBytes(limits.max_batch_bytes)} per batch` : 'Loading upload limits…'}<br/>PDFs: up to 5 pages · Images: up to 20 megapixels</small>
       </div>
-      {health?.demo && samples.length > 0 && <div className="sample-area"><div><span>Try a sample certificate</span><small>LOCAL DEMO</small></div><div className="sample-list">{samples.map(s => <button type="button" key={s.name} disabled={busy || !limits} onClick={() => sample(s)}>{s.label}</button>)}</div></div>}
+      {health?.demo && samples.length > 0 && (
+        <div className="sample-area">
+          <div>
+            <span>Try a sample certificate</span>
+            <small>LOCAL DEMO</small>
+          </div>
+          <div className="sample-list" role="region" aria-label="Sample demonstration certificates">
+            {samples.map(s => {
+              const isSelected = previewSample?.name === s.name;
+              return (
+                <div key={s.name} className="sample-chip-group">
+                  <button
+                    type="button"
+                    className={'sample-btn ' + (isSelected ? 'is-previewing' : '')}
+                    disabled={busy || !limits}
+                    onClick={() => sample(s)}
+                    onMouseEnter={() => setPreviewSample(s)}
+                    onMouseLeave={() => setPreviewSample(prev => prev?.name === s.name ? null : prev)}
+                    onFocus={() => setPreviewSample(s)}
+                    onBlur={() => setPreviewSample(prev => prev?.name === s.name ? null : prev)}
+                    aria-describedby={isSelected ? 'sample-preview-panel' : undefined}
+                  >
+                    {s.label}
+                  </button>
+                  <button
+                    type="button"
+                    className={'sample-preview-trigger ' + (isSelected ? 'active' : '')}
+                    aria-label={`Preview ${s.label} sample details`}
+                    title={`Preview ${s.label} details`}
+                    aria-expanded={isSelected}
+                    onClick={() => setPreviewSample(prev => prev?.name === s.name ? null : s)}
+                  >
+                    <FileText size={12} aria-hidden="true" />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+          {previewSample && (
+            <div
+              id="sample-preview-panel"
+              className="sample-preview-card"
+              role="region"
+              aria-label="Sample preview"
+            >
+              <div className="sample-preview-archival-frame">
+                <div className="sample-preview-header">
+                  <div className="sample-preview-tag">
+                    <span className="sample-preview-seal" aria-hidden="true">★</span>
+                    <span>Sample preview</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="sample-preview-close"
+                    aria-label="Close sample preview"
+                    onClick={() => setPreviewSample(null)}
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+                <div className="sample-preview-body">
+                  <div className="sample-preview-watermark" aria-hidden="true">ARCHIVAL DEMO</div>
+                  <div className="sample-preview-title-row">
+                    <span className="sample-preview-eyebrow">DEMONSTRATION RECORD</span>
+                    <h4 className="sample-preview-title">{previewSample.label}</h4>
+                  </div>
+                  <div className="sample-preview-meta-grid">
+                    <div className="sample-preview-field">
+                      <span className="sample-preview-label">Certificate ID</span>
+                      <strong className="sample-preview-value sample-preview-ref">{previewSample.ref}</strong>
+                    </div>
+                    <div className="sample-preview-field">
+                      <span className="sample-preview-label">Filename</span>
+                      <code className="sample-preview-value sample-preview-filename">{previewSample.name}</code>
+                    </div>
+                  </div>
+                  <div className="sample-preview-footer">
+                    <p className="sample-preview-note">Activating this sample loads its local demo file.</p>
+                    <button
+                      type="button"
+                      className="sample-preview-load-btn"
+                      disabled={busy || !limits}
+                      onClick={() => sample(previewSample)}
+                    >
+                      Load {previewSample.label} demo file <ArrowUpRight size={14} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
       {rows.length ? <ul className="upload-file-list" aria-label="Selected certificates">{rows.map(item => <li key={item.id} className={'upload-file-card ' + (item.validation ? 'invalid' : '')}>
         <div className="upload-file-top">{item.preview ? <img className="certificate-preview" src={item.preview} alt={'First page preview of ' + item.file.name}/> : <div className="certificate-preview placeholder"><FileText size={24}/></div>}
           <div className="upload-file-info"><strong>{item.file.name}</strong><span>{item.file.name.split('.').pop().toUpperCase()} · {formatBytes(item.file.size)}</span><span className={'upload-file-state ' + (item.validation ? 'bad' : '')}>{item.checking ? <><LoaderCircle size={14} className="spin"/>Checking readability…</> : item.validation ? 'Needs attention' : 'Ready to upload'}</span></div>

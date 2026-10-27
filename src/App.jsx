@@ -140,6 +140,99 @@ function AppleIcon() {
   );
 }
 
+function ScrollWaveProgress() {
+  const [progress, setProgress] = useState(0);
+
+  useEffect(() => {
+    let ticking = false;
+
+    function handleScroll() {
+      if (!ticking) {
+        window.requestAnimationFrame(() => {
+          const docEl = document.documentElement;
+          const body = document.body;
+          const scrollTotal = (docEl.scrollHeight || body.scrollHeight) - window.innerHeight;
+          if (scrollTotal > 2) {
+            const currentScroll = window.scrollY || docEl.scrollTop || 0;
+            const fraction = Math.min(Math.max(currentScroll / scrollTotal, 0), 1);
+            setProgress(fraction);
+          } else {
+            setProgress(0);
+          }
+          ticking = false;
+        });
+        ticking = true;
+      }
+    }
+
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    window.addEventListener('resize', handleScroll, { passive: true });
+    handleScroll();
+
+    return () => {
+      window.removeEventListener('scroll', handleScroll);
+      window.removeEventListener('resize', handleScroll);
+    };
+  }, []);
+
+  const wavePath = "M 0,6 Q 25,0 50,6 T 100,6 T 150,6 T 200,6 T 250,6 T 300,6 T 350,6 T 400,6 T 450,6 T 500,6 T 550,6 T 600,6 T 650,6 T 700,6 T 750,6 T 800,6 T 850,6 T 900,6 T 950,6 T 1000,6 T 1050,6 T 1100,6 T 1150,6 T 1200,6";
+  const dashOffset = (100 * (1 - progress)).toFixed(2);
+
+  return (
+    <div className="scroll-wave-container" aria-hidden="true" role="presentation">
+      <svg
+        className="scroll-wave-svg"
+        viewBox="0 0 1200 12"
+        preserveAspectRatio="none"
+        xmlns="http://www.w3.org/2000/svg"
+      >
+        <path
+          className="scroll-wave-path-bg"
+          d={wavePath}
+          pathLength="100"
+        />
+        <path
+          className="scroll-wave-path"
+          d={wavePath}
+          pathLength="100"
+          strokeDasharray="100"
+          strokeDashoffset={dashOffset}
+        />
+      </svg>
+    </div>
+  );
+}
+
+function useScrollReveal(dependency) {
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      return;
+    }
+    const observer = new IntersectionObserver(
+      entries => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('is-revealed');
+            observer.unobserve(entry.target);
+          }
+        });
+      },
+      { threshold: 0.04, rootMargin: '0px 0px -20px 0px' }
+    );
+
+    const elements = document.querySelectorAll(
+      '.panel, .stat-card, .dashboard-hero, .architecture-intro, .gap-card, .evidence-grid > div, .login-inner, .story-content, .recent-panel, .action-queue-card, .institution-card'
+    );
+    elements.forEach(el => {
+      el.classList.add('scroll-reveal');
+      observer.observe(el);
+    });
+
+    return () => observer.disconnect();
+  }, [dependency]);
+}
+
 function Login({onLogin, health, sessionMessage}) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -156,6 +249,8 @@ function Login({onLogin, health, sessionMessage}) {
   const [verifyCode, setVerifyCode] = useState('');
   const [demoCode, setDemoCode] = useState('');
   const [pendingCard, setPendingCard] = useState(null);
+
+  useScrollReveal(accountType);
 
   useEffect(() => {
     function onHash() {
@@ -277,8 +372,10 @@ function Login({onLogin, health, sessionMessage}) {
   }
 
   return (
-    <div className="login-shell">
-      <section className="login-story">
+    <>
+      <ScrollWaveProgress/>
+      <div className="login-shell">
+        <section className="login-story">
         <Brand/>
         <div className="story-content">
           <span className="eyebrow light">ROLE-BASED CREDENTIAL ASSURANCE</span>
@@ -604,6 +701,7 @@ function Login({onLogin, health, sessionMessage}) {
         <footer>AI assists the analysis. Trusted records determine the result.</footer>
       </section>
     </div>
+    </>
   );
 }
 
@@ -2492,6 +2590,8 @@ export default function App() {
     }
   }
 
+  useScrollReveal(page + (user ? user.role : 'anon'));
+
   if (!ready) {
     return (
       <div className="loading-screen">
@@ -2520,7 +2620,9 @@ export default function App() {
   const current = nav.find(n => n[0] === page) || nav[0];
 
   return (
-    <div className="app-shell">
+    <>
+      <ScrollWaveProgress/>
+      <div className="app-shell">
       <aside className={'sidebar ' + (mobile ? 'open' : '')}>
         <Brand/>
         <div className="workspace-label">
@@ -2688,5 +2790,6 @@ export default function App() {
         </main>
       </div>
     </div>
+    </>
   );
 }
