@@ -467,4 +467,48 @@ def test_review_decision_recording_and_permission_enforcement():
     decisions = [h["decision"] for h in history]
     assert "APPROVED" in decisions
     assert "FLAGGED_FOR_AUDIT" in decisions
-    assert "FLAGGED_FOR_AUDIT" in decisions
+
+
+def test_features_contract_compatibility():
+    """Verify that all 4 AI advisory features provide the required keys and aliases for frontend integration."""
+    test_img = make_test_image(text="Sample Diploma")
+
+    # 1. Visual tampering schema
+    vt = analyze_visual_tampering(test_img, "jpeg")
+    assert "regions" in vt
+    assert "suspicious_regions" in vt
+    assert "model_provenance" in vt
+    assert "anomaly_score" in vt
+    for r in vt["regions"]:
+        assert "box" in r
+        assert "bbox" in r
+        assert "confidence" in r
+        assert "score" in r
+
+    # 2. Field comparison schema
+    reg_record = {
+        "confirmed_metadata": json.dumps({"recipient_name": "Jane", "institution_name": "Apex", "certificate_reference": "REF1"}),
+        "metadata_schema_version": "2026.1"
+    }
+    extracted = {"recipient_name": "Jane", "institution_name": "Apex", "certificate_reference": "REF1"}
+    fa = compare_fields(reg_record, extracted)
+    assert "critical_field_changed" in fa
+    assert "all_fields_match" in fa
+    assert "reference" in fa["fields"]
+    assert "institution" in fa["fields"]
+
+    # 3. Transformation analysis schema
+    ta = analyze_transformations(test_img, "jpeg", is_hash_match=False)
+    assert "outcome" in ta
+    assert "advisory_outcome" in ta
+    assert "image_quality" in ta
+    assert "skew_angle" in ta
+    assert "ocr_reliability" in ta
+    assert "visual_anomaly_score" in ta
+
+    # 4. Review routing schema
+    rr = determine_review_routing("POSSIBLE_TAMPERING_OR_FILE_MISMATCH", fa, vt, ta, 90.0, "diploma", extracted)
+    assert "outcome" in rr
+    assert "routing_outcome" in rr
+    assert "layout_familiarity" in rr
+    assert "calibrated_confidence" in rr

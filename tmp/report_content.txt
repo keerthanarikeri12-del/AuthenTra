@@ -1,0 +1,152 @@
+TABLE OF CONTENT
+1. Introduction
+1.1 Introduction to AuthenTra
+1.1.1 Co-authorship
+1.2 About Project
+1.2.1 Problem statement
+1.2.2 Objective
+2. Literature Survey
+3. Project Design
+3.1 Design Architecture
+4. Implementation
+4.1 Flowchart
+5. Results
+Login and Signup page
+Institution Dashboard
+Verifier Dashboard
+System Admin Dashboard
+6. Conclusion
+References
+===
+#Chapter 1
+#Introduction
+##1.1 Introduction to AuthenTra
+AuthenTra - AI assisted digital certificate authenticity verification using blockchain is a web application for checking whether a submitted certificate matches a record registered by an approved institution. It combines a React interface, a FastAPI backend, a Solidity registry and local document analysis. A verifier can upload a certificate, inspect the evidence behind the result and understand what to do when the evidence is incomplete.
+The application calculates a SHA-256 digest from the original uploaded file. A certificate is verified only when its registry record exists, the digest matches, the issuer is currently approved and the credential has not been revoked. OCR and machine learning provide additional observations. They help explain unusual content but cannot replace these cryptographic checks.
+##1.1.1 Co-authorship
+The project connects interface design, backend development, smart contracts, document analysis and testing. These areas depend on one another: the interface must explain the result correctly, the API must enforce permissions, and the contract must protect registration and revocation. This report describes the integrated work without assigning individual contributions that have not been documented. Technical review should cover both correctness and whether a student or employer can understand the result.
+##1.2 About Project
+##1.2.1 Problem statement
+Digital certificates are easy to share, but appearance alone does not establish authenticity. Names, grades and dates can be edited. Genuine documents can also change after scanning or compression. Manual confirmation with an institution takes time and depends on staff availability. AuthenTra addresses the need for a repeatable process that distinguishes a registered match from an unexplained mismatch, a revoked credential and a document that cannot yet be assessed.
+===
+##1.2.2 Objective
+The main objective is to provide a traceable way to verify digital certificates through institution-controlled registration. AuthenTra records a file digest and a hashed certificate reference on an Ethereum-compatible blockchain. A verifier can compare an uploaded file with that record without placing the certificate itself on the blockchain.
+The project also aims to explain results clearly. A matching file is verified only after issuer and revocation checks succeed. A mismatch explains that editing, rescanning, re-exporting and compression can change the bytes. An absent record calls for clarification rather than an unsupported accusation of forgery.
+Another objective is to use AI assistance responsibly. Local OCR extracts text, and an experimental Random Forest identifies unusual text features. Field comparison and image analysis provide supporting evidence when suitable references exist. Uncertain cases can be routed for review, and unreadable documents can trigger a request for a better upload.
+Role separation is central to the design. Verifiers submit certificates and view their history. Approved institutions register and revoke credentials within their authority. System administrators govern institutional access and review platform activity. The backend enforces these responsibilities even if a user attempts to bypass the interface.
+The prototype uses Ganache, SQLite and a Python backend. Its scope includes registration, verification, revocation, batch processing, document analysis and review records. Production deployment, independent security assessment and evaluation on representative real certificates remain future work. A local blockchain demonstrates contract behaviour; it does not establish the resilience of a distributed production network.
+===
+#Chapter 2
+#Literature Survey
+The survey covers blockchain credentials, credential standards, optical character recognition and machine learning classification. These sources address different parts of certificate verification. None removes the need to decide which institutions are trusted to issue credentials.
+##Blockchain credentials
+Blockcerts describes an open ecosystem for issuing and verifying blockchain-based records [1]. It separates the credential from the evidence used to verify it. AuthenTra uses the related idea of comparing a document with a registered digest. However, its custom Solidity registry is not a Blockcerts-compatible implementation, and a local node has a different trust and availability model from a distributed deployment.
+##Credential data and trust roles
+The W3C Verifiable Credentials Data Model v2.0 defines an issuer, holder and verifier ecosystem and a structured way to express claims [2]. It also discusses privacy and security. This informs AuthenTra's role separation. The current project checks uploaded files against a registry; it does not implement the complete W3C credential exchange and proof formats. Standards compatibility remains an extension.
+##OCR and classification
+Smith's overview of Tesseract describes OCR recognition components [3]. It supports extracting text from scanned certificates, while recognition remains distinct from authentication. Breiman's Random Forests introduces an ensemble classification method [4]. AuthenTra uses this method for experimental advisory analysis. Its performance depends on the training examples and features, so synthetic-text results cannot establish reliable fraud detection across institutions.
+===
+##Literature Survey Comparison
+@LITERATURE
+The comparison includes research papers, a standard and implementation documentation. Each source is used for its actual contribution, rather than being presented as a measured evaluation of AuthenTra. Full references are provided at the end of the report.
+===
+##Literature Survey Discussion
+The main design lesson is that file integrity, issuer authority and document interpretation are different questions. A hash can establish that two files have identical bytes. It cannot establish that an institution is legitimate or that the original claims are truthful. OCR can recover text but cannot validate the issuer. AuthenTra combines these checks while preserving their different meanings.
+A practical gap remains between a binary hash comparison and the explanation a user needs. A genuine certificate that has been printed and scanned normally has a different digest. A visual change may indicate editing, but it may also follow compression. Field comparison, visual analysis and review routing help explain this gap without turning an uncertain upload into a verified original.
+Training data is another concern. A classifier trained on artificial changes may learn how those examples were constructed instead of recognising realistic fraud. Future evaluation should separate institutions, layouts and document sources between training and testing. It should measure false alarms, missed alterations and cases where the system declines to decide.
+Privacy requires more than moving a document off-chain. AuthenTra stores names, grades and full files outside the contract. The registry contains hashes, issuer addresses, timestamps and revocation state. A hash of a predictable identifier is not automatically anonymous, so access controls and careful handling of off-chain records remain necessary.
+The contribution of this mini project is the integration of these layers into a usable local application. Blockchain provides an integrity reference, governance defines who can register credentials, and document analysis gives supporting context. Explicit uncertainty helps users distinguish what has been established from what still needs review.
+===
+#Chapter 3
+#Project Design
+AuthenTra follows a client-server architecture. React and Vite provide workspaces for verifiers, institutions and system administrators. FastAPI authenticates requests, validates uploads and coordinates verification. SQLite stores accounts, institutional state, registration metadata, history and review information. A Solidity contract on Ganache stores certificate integrity records.
+Registration starts with an approved institution. It uploads the original certificate and confirms the extracted information. The backend hashes the original bytes and submits the hashed reference and file digest to the contract. Transaction confirmation is required before registration is treated as successful. Duplicate references and duplicate file hashes are rejected.
+Verification starts with a supported PDF, PNG or JPEG. Validation rejects invalid or oversized files. SHA-256 is calculated before separate working copies are used for analysis. A file-hash lookup can locate an original record; reference lookup supports a readable or manually supplied certificate identifier. The decision engine checks record existence, revocation, issuer authorization and digest equality.
+Embedded PDF text is used where available; scanned content uses OCR. Confirmed reference fields support field comparison. Visual analysis examines suspicious regions, while transformation analysis considers whether rescanning or re-exporting may explain a difference. Review routing can request a better upload when evidence is insufficient.
+The trust boundary lies at the backend and contract. Dashboard visibility alone is not an access control. Personal fields remain off-chain. The current contract does not store the field metadata commitment; this is maintained in the application's registration data and must not be described as an independently anchored on-chain proof.
+===
+##3.1 Design Architecture
+@ARCH
+Figure 3.1: AuthenTra architecture. The API coordinates the blockchain, off-chain storage and advisory services. The branches represent separate responsibilities, not a sequence in which AI determines the blockchain outcome. Issuance and governance submit authenticated transactions; verification reads the relevant record and issuer state.
+===
+#Chapter 4
+#Implementation
+##1. Frontend Development
+React components provide authentication, upload forms, dashboards, result views and history. Vite supports development and production builds. Batch progress and item-level feedback allow a user to identify failures without losing the results of other files.
+##2. Authentication and Role Handling
+FastAPI checks sessions and permissions at protected endpoints. Institutional access requires verification and administrator approval. A verifier cannot register credentials. Administrators govern institutions and are blocked from the ordinary certificate-upload and issuance paths.
+##3. Dashboard and Role-Specific Features
+Verifiers can submit up to five files per batch and view personal history. Institutions can process issuance batches of up to one hundred files, confirm metadata and revoke their credentials. System administrators manage institutional approval and inspect audit information.
+##4. Certificate Registration and Revocation
+The contract records file hashes, issuer addresses, registration timestamps and revocation flags under hashed certificate references. The owner manages issuer approval. Approved issuers register records, and revocation is restricted by contract permissions. Both the reference and file-hash indexes are updated after revocation so that an alternate lookup cannot show a withdrawn certificate as active.
+===
+##5. Certificate Upload and Document Analysis
+The pipeline accepts valid PDF, PNG and JPEG files within configured limits of 10 MB and five pages. The untouched upload is hashed. Embedded text extraction or local Tesseract OCR supports reference identification. Separate raster copies are used for visual analysis, preserving the original file digest.
+##6. Backend Services
+The API coordinates registration, verification, batch status, metadata confirmation and reviews. The registry adapter handles blockchain calls and transaction confirmation. A failed connection produces an unavailable result rather than a verified outcome based on AI or cached text. Health checks cover database access, blockchain connectivity and advisory model readiness.
+##7. Database Structure
+SQLite maintains users, institutions, registrations, upload jobs, verification history, reference assets and review decisions. Confirmed fields are bound to a reference and file hash through a deterministic off-chain commitment. Review records include reviewer details, notes and policy version. These application records are not blockchain-protected immutable storage.
+##8. Security and Access Control
+Server-side authorization limits actions to the proper role and institution. The contract independently checks issuer permissions. Personal data stays off-chain, and retained previews have controlled access and deletion support. Production use would also require protected signing keys and a documented retention policy.
+##9. Testing and Debugging
+The repository includes unit, API, contract, upload and browser tests. Important cases include matching files, altered files, revoked records, suspended issuers, invalid inputs and unavailable services. Controlled module evaluation is reported separately from claims about real-world fraud detection.
+===
+##4.1 Flowchart
+@FLOW
+Figure 4.1: Working verification flow. Each failure branch produces a distinct outcome. Advisory findings may explain a result but cannot promote a failed cryptographic check to verified.
+===
+##4.1 Flowchart Explanation
+##1) Start and authentication
+The user opens AuthenTra and signs in. The backend validates the session before allowing a protected action.
+##2) Role-based dashboard
+The account's permissions determine its workspace. An unapproved institution cannot issue certificates, and a verifier cannot gain issuer access by opening another page.
+##3) Registration path
+An approved institution uploads the original file, confirms the reference information and requests registration. The contract checks authorization and uniqueness before recording the digest and reference hash.
+##4) Verification path
+The verifier submits a document and, if needed, a certificate reference. The backend validates the file, hashes its untouched bytes and queries the registry.
+##5) Authoritative checks
+A missing record remains unregistered or inconclusive. A revoked credential or unauthorized issuer cannot pass. An active, authorized record with an exact hash match produces a verified result.
+##6) Analysis and review
+OCR, field comparisons and image checks provide context. Poor quality can trigger a better-upload request. Review decisions are recorded without rewriting the cryptographic result.
+##7) Storage, logout and end
+Authorized history and review information are retained off-chain. The user can inspect the result and end the session. Revocation and institutional governance follow their separate permission checks.
+===
+#Chapter 5
+#Results
+The saved local evaluation of 28 October 2026 demonstrates individual modules under controlled conditions [5]. It provides evidence for the tested cases, not a general accuracy claim for fraud detection. The figures below describe the saved evaluation and are not a new benchmark run performed for this report.
+Field-level change detection used eight cases, including exact matches, harmless formatting, altered names, changed grades, courses and dates, missing optional fields and OCR noise. The harness reports precision, recall and F1 of 1.0, with zero conservative-normalization false matches. Mean latency was 0.09 ms and p95 was 0.32 ms. These are module timings rather than end-to-end verification times.
+Visual localization used three controlled images. Recorded precision was 0.50 and recall was 1.00. The benign false-alarm rate was 0.50, demonstrating that compression artifacts can be mistaken for suspicious regions. Mean latency was 19.007 ms and p95 was 22.016 ms. This small sample cannot estimate performance across real institutions or document types.
+Transformation analysis covered four cases and recorded zero violations of the rule that advisory evidence must not upgrade a mismatched file to verified. Five routing cases produced two completed-without-review outcomes, one administrator review, one better-quality request and one analysis-unavailable outcome. This does not establish coverage of every possible institutional review route.
+The results support separating proof from interpretation. They also show why uncertainty matters: OCR noise can resemble a field change, visual checks can raise false alarms, and local module timings exclude network and transaction costs. Broader evaluation should use consented certificates from multiple institutions and report missed alterations, false positives and abstentions.
+===
+##Login and Signup page
+Authentication is the entry point to AuthenTra. Institutional onboarding requires email verification and administrator approval before issuance is enabled. Claiming an educational affiliation does not automatically make an account a trusted issuer.
+Successful authentication opens the appropriate workspace. Invalid credentials, incomplete approval and insufficient permissions require clear feedback. Backend checks remain authoritative, so navigating to a privileged page does not grant privileged actions.
+##Institution Dashboard
+The institution dashboard replaces the faculty workspace in the template. Its purpose is certificate registration, metadata confirmation and management of credentials issued by the institution. A batch upload shows the status of each file. The interface distinguishes receipt of a file from successful blockchain confirmation.
+Confirmed fields provide a reference for later comparison. An off-chain commitment binds these fields to the certificate reference and file hash. Missing reference data produces an unavailable comparison instead of guessed values. The blockchain does not contain the student's name or grades.
+Revocation withdraws a credential while preserving its registration record. The contract restricts the operation and synchronizes both lookup indexes. A verifier submitting the same original file later receives a revoked outcome. Institution users can also review cases within their ownership boundary and retain explanations for accountability.
+===
+##Verifier Dashboard
+The verifier dashboard replaces the student workspace in the template. It supports certificate submission, processing feedback and personal verification history. Each result includes a primary category, an explanation and separate advisory evidence where available.
+An exact match means that the uploaded bytes match an active record from a currently approved issuer. A mismatch means that the file differs from the registered original. This could follow intentional editing or an ordinary conversion, so the user is advised to obtain the original issued file or contact the institution. Absence from the registry does not by itself prove fraud.
+##System Admin Dashboard
+The administrator dashboard replaces the club-member workspace. It supports institutional approval, suspension and revocation of access. Approval changes are synchronized with the registry so that application permissions and issuer status remain consistent. Administrators also examine platform activity and escalated reviews.
+This role is separate from routine issuance. The application blocks normal verification uploads and certificate registration by administrators, while the contract owner retains governance powers. Clear responsibilities make it possible to distinguish who issued a credential, who approved the institution and who reviewed a disputed result.
+Across the workspaces, the aim is a result that can be acted on. Verifiers need explanations, institutions need traceable records, and administrators need evidence for governance. These different needs share the same verification rules.
+===
+#Chapter 6
+#Conclusion
+AuthenTra provides a local implementation of AI assisted digital certificate authenticity verification using blockchain. It connects a role-based application with a cryptographic registry and supporting document analysis. The system compares uploaded files with registered originals, checks issuer authorization and accounts for revocation before reporting verification.
+The main strength is the separation between proof and interpretation. Blockchain records and exact hashes establish whether the uploaded file matches a registered credential. OCR, machine learning and visual analysis help explain its content and possible review needs. A plausible appearance or low anomaly score is never sufficient evidence of authenticity.
+The project also demonstrates the importance of governance. Registration is limited to approved institutions, history is scoped to the user, and administration is separated from ordinary issuance. Full documents and personal fields remain off-chain. Institutional trust, key protection and retention still need operational controls.
+Controlled evaluation supports the tested behaviour but exposes limits. Field comparison depends on reliable extraction and confirmed references. Visual analysis can flag benign compression, and the advisory classifier has not been shown to generalize across real certificate collections. Ganache remains a development environment, not proof of production decentralization or availability.
+Future work should prioritize diverse, consented evaluation data, better handling of OCR uncertainty, independent security review and resilient deployment. Established credential standards could improve interoperability. Any extension should preserve the central rule: uncertainty must remain visible, and advisory analysis must never convert a failed cryptographic check into a verified certificate.
+===
+##References
+[1] Blockcerts community. Blockcerts Guide: Introduction. Official documentation, undated. https://www.blockcerts.org/guide/ (accessed 28 October 2026).
+[2] W3C Verifiable Credentials Working Group. Verifiable Credentials Data Model v2.0. W3C Recommendation, 15 May 2025. https://www.w3.org/TR/vc-data-model-2.0/
+[3] Smith, R. An Overview of the Tesseract OCR Engine. Ninth International Conference on Document Analysis and Recognition, 2007, pp. 629-633. https://research.google/pubs/an-overview-of-the-tesseract-ocr-engine/
+[4] Breiman, L. Random Forests. Machine Learning, vol. 45, 2001, pp. 5-32. DOI: 10.1023/A:1010933404324. https://stat-www.berkeley.edu/~breiman/randomforest2001.pdf
+[5] AuthenTra project. Saved comprehensive evaluation record, 28 October 2026, 09:12:22 UTC. Internal artifact: .local/comprehensive-evaluation-report.json.
+[6] AuthenTra project. Implementation sources: backend/core.py, contracts/AuthenTraRegistry.sol, README.md and docs/ARCHITECTURE.md. Local snapshot inspected on 28 October 2026.

@@ -152,12 +152,15 @@ def determine_review_routing(
 
     return {
         "routing_outcome": outcome,
+        "outcome": outcome,
         "headline": headline,
         "policy_version": pol["version"],
         "requires_human_review": requires_review,
         "target_reviewer": target_reviewer,
         "reasons": reasons,
         "layout_assessment": layout,
+        "layout_familiarity": layout.get("familiarity_score", 0.9),
+        "calibrated_confidence": (ocr_confidence / 100.0) if ocr_confidence is not None else 0.9,
         "evidence_summary": {
             "field_status": field_status,
             "visual_status": visual_status,

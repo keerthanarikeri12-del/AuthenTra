@@ -36,7 +36,7 @@ CATEGORY_MAP = {
 }
 
 CATEGORY_ACTIONS = {
-    "VERIFIED": "No further action is required. This credential is confirmed authentic, active, and issued by an authorized institution.",
+    "VERIFIED": "No further action is required. This credential matches the on-chain record, is active, and was issued by an authorized institution.",
     "POSSIBLE_TAMPERING_OR_FILE_MISMATCH": "Verify that you have uploaded the exact original digital file issued by the institution. Re-exporting, re-saving, PDF compression, or rescanning alters file bytes. If this is the original file, contact the issuing institution to review.",
     "TAMPERING_DETECTED": "This file differs from the registered record. Verify that you have uploaded the exact original digital file issued by the institution. Re-exporting, re-saving, PDF compression, or rescanning alters file bytes.",
     "NOT_REGISTERED": "No registration exists for this certificate. Confirm the certificate reference with the issuing institution.",

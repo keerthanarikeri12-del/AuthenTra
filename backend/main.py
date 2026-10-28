@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Literal
 import jwt
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -23,6 +23,7 @@ from .fields import FIELD_SCHEMA_VERSION, compute_metadata_commitment, canonical
 from .visual_tampering import analyze_visual_tampering
 from .transformations import analyze_transformations
 from .routing import determine_review_routing, record_review_decision, get_review_history
+from .report import build_report_pdf, build_batch_report_pdf
 from . import uploads, domains, email_verification, auth_oauth
 from .storage import ROOT, audit, connect, initialize, password_hash, password_matches, seed_demo, ROLE_USER, ROLE_INSTITUTION_ADMIN, ROLE_SYSTEM_ADMIN, canonical_role
 
@@ -524,11 +525,15 @@ def dashboard(user: User):
 @app.get("/api/verifications")
 def history(user: User):
     with connect() as conn:
-        return [dict(r) for r in conn.execute("SELECT * FROM verifications WHERE user_id=? ORDER BY id DESC LIMIT 500", (user["id"],))]
+        rows = [dict(r) for r in conn.execute("SELECT * FROM verifications WHERE user_id=? ORDER BY id DESC LIMIT 500", (user["id"],))]
+        for r in rows:
+            r["report_url"] = f"/api/verifications/{r['id']}/report.pdf"
+        return rows
 
 async def read_upload(file):
     try:
         data = await file.read(MAX_BYTES + 1)
+        file._read_bytes = len(data)
         kind = await run_in_threadpool(uploads.validate_file, data, file.filename, file.content_type)
         return data, kind
     except ValueError as exc:
@@ -536,7 +541,7 @@ async def read_upload(file):
     finally:
         await file.close()
 
-def process_verification(data, kind, supplied_reference, user):
+def process_verification(data, kind, supplied_reference, user, file_name=None, file_size=None):
     start = time.perf_counter()
     digest = hashlib.sha256(data).hexdigest().lower()
     analysis = analyze(data, kind)
@@ -828,23 +833,32 @@ def process_verification(data, kind, supplied_reference, user):
 
     next_action = CATEGORY_ACTIONS.get(category, "Review the result details and consult the issuing institution.")
 
+    calculated_size = file_size if file_size is not None else (len(data) if data is not None else None)
+
     with connect() as conn:
         cursor = conn.execute(
             "INSERT INTO verifications("
             "user_id,reference,status,category,file_hash,registered_hash,issuer,checks,message,duration_ms,ai_status,"
-            "field_analysis,visual_tampering,transformation_analysis,review_routing) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "field_analysis,visual_tampering,transformation_analysis,review_routing,"
+            "report_json,file_name,file_size,verified_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (user["id"], reference, status, category, digest, record["file_hash"] if record else None,
              record["issuer"] if record else None, json.dumps(checks), message, elapsed, analysis["ai"]["status"],
              json.dumps(field_comparison), json.dumps(visual_analysis), json.dumps(transformation_advisory),
-             json.dumps(review_routing))
+             json.dumps(review_routing),
+             None, file_name, calculated_size, verified_at)
         )
         check_id = cursor.lastrowid
 
     reason = message if verification_status in ("NOT_REGISTERED", "INCONCLUSIVE", "VERIFICATION_UNAVAILABLE", "TAMPERING_DETECTED", "ISSUER_NOT_AUTHORIZED") else None
 
-    return {
+    report_url = f"/api/verifications/{check_id}/report.pdf"
+
+    result = {
         "id": check_id,
+        "report_url": report_url,
+        "file_name": file_name,
+        "file_size": calculated_size,
         "reference": reference,
         "status": status,
         "verification_status": verification_status,
@@ -886,6 +900,19 @@ def process_verification(data, kind, supplied_reference, user):
         **analysis,
     }
 
+    snapshot = dict(result)
+    for forbidden in [
+        "jwt", "token", "access_token", "refresh_token", "cookie", "cookies",
+        "private_key", "secret", "password", "file_bytes", "data", "data_bytes",
+        "issuer_signature", "raw_bytes"
+    ]:
+        snapshot.pop(forbidden, None)
+
+    with connect() as conn:
+        conn.execute("UPDATE verifications SET report_json=? WHERE id=?", (json.dumps(snapshot), check_id))
+
+    return result
+
 @app.post("/api/verify")
 async def verify(user: User, file: UploadFile = File(...), reference: str = Form("")):
     if canonical_role(user["role"]) == ROLE_SYSTEM_ADMIN:
@@ -896,17 +923,24 @@ async def verify(user: User, file: UploadFile = File(...), reference: str = Form
         if exc.status_code != 422:
             raise
         now_iso = datetime.now(timezone.utc).isoformat()
+        file_name = getattr(file, "filename", None)
+        file_size = getattr(file, "_read_bytes", None) or getattr(file, "size", None)
         with connect() as conn:
             cursor = conn.execute(
-                "INSERT INTO verifications(user_id,reference,status,category,file_hash,registered_hash,issuer,checks,message,duration_ms,ai_status) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO verifications(user_id,reference,status,category,file_hash,registered_hash,issuer,checks,message,duration_ms,ai_status,"
+                "file_name,file_size,verified_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (user["id"], None, "unable_to_authenticate", "INVALID_FILE", None, None, None,
                  json.dumps({"reference_found": False, "hash_matches": None, "issuer_approved": None, "active": None}),
-                 exc.detail, 0.0, "unavailable")
+                 exc.detail, 0.0, "unavailable", file_name, file_size, now_iso)
             )
             check_id = cursor.lastrowid
-        return {
+        report_url = f"/api/verifications/{check_id}/report.pdf"
+        result = {
             "id": check_id,
+            "report_url": report_url,
+            "file_name": file_name,
+            "file_size": file_size,
             "reference": None,
             "status": "unable_to_authenticate",
             "verification_status": "INVALID_FILE",
@@ -949,7 +983,143 @@ async def verify(user: User, file: UploadFile = File(...), reference: str = Form
             "verified_at": now_iso,
             "duration_ms": 0.0,
         }
-    return await run_in_threadpool(process_verification, data, kind, reference, user)
+        with connect() as conn:
+            conn.execute("UPDATE verifications SET report_json=? WHERE id=?", (json.dumps(result), check_id))
+        return result
+    return await run_in_threadpool(process_verification, data, kind, reference, user, file_name=file.filename, file_size=len(data))
+
+
+def row_to_snapshot(row: dict) -> dict:
+    if row.get("report_json"):
+        try:
+            snapshot = json.loads(row["report_json"])
+            if isinstance(snapshot, dict):
+                snapshot["id"] = row["id"]
+                if row.get("verified_at"):
+                    snapshot["verified_at"] = row["verified_at"]
+                if row.get("file_name") and not snapshot.get("file_name"):
+                    snapshot["file_name"] = row["file_name"]
+                if row.get("file_size") is not None and snapshot.get("file_size") is None:
+                    snapshot["file_size"] = row["file_size"]
+                return snapshot
+        except Exception:
+            pass
+
+    checks = {}
+    if row.get("checks"):
+        try:
+            checks = json.loads(row["checks"])
+        except Exception:
+            checks = {}
+
+    def parse_dict(val):
+        if val and isinstance(val, str):
+            try:
+                return json.loads(val)
+            except Exception:
+                return {}
+        return val if isinstance(val, dict) else {}
+
+    cat = row.get("category") or "INCONCLUSIVE"
+    return {
+        "id": row["id"],
+        "is_legacy": True,
+        "legacy_note": "recorded before report snapshots were enabled",
+        "reference": row.get("reference") or "N/A",
+        "status": row.get("status") or "inconclusive",
+        "verification_status": cat,
+        "category": cat,
+        "label": LABELS.get(cat, cat),
+        "message": row.get("message") or "N/A",
+        "next_action": CATEGORY_ACTIONS.get(cat, "Review the result details and consult the issuing institution."),
+        "file_hash": row.get("file_hash") or "N/A",
+        "registered_hash": row.get("registered_hash") or "N/A",
+        "issuer": row.get("issuer") or "N/A",
+        "issuer_name": "N/A",
+        "issuer_authorized": checks.get("issuer_approved"),
+        "hash_matches": checks.get("hash_matches"),
+        "checks": checks,
+        "contract_address": "N/A",
+        "chain_id": "N/A",
+        "network_name": "N/A",
+        "transaction_hash": "N/A",
+        "block_number": "N/A",
+        "ocr_confidence": "N/A",
+        "extraction_method": "N/A",
+        "fields": {},
+        "ai": {"status": row.get("ai_status") or "unavailable", "label": "N/A", "score": None},
+        "field_analysis": parse_dict(row.get("field_analysis")),
+        "visual_tampering": parse_dict(row.get("visual_tampering")),
+        "transformation_analysis": parse_dict(row.get("transformation_analysis")),
+        "review_routing": parse_dict(row.get("review_routing")),
+        "file_name": row.get("file_name") or "N/A",
+        "file_size": row.get("file_size"),
+        "verified_at": row.get("verified_at") or row.get("created_at") or "N/A",
+        "duration_ms": row.get("duration_ms"),
+    }
+
+
+@app.get("/api/verifications/report.pdf")
+def batch_verification_report(user: User, ids: str = Query(...)):
+    role = canonical_role(user["role"])
+    if role in (ROLE_SYSTEM_ADMIN, ROLE_INSTITUTION_ADMIN):
+        raise HTTPException(403, "Administrators do not have verification report permissions.")
+
+    raw_ids = [s.strip() for s in (ids or "").split(",") if s.strip()]
+    if not raw_ids:
+        raise HTTPException(400, "Query parameter 'ids' is required.")
+    if len(raw_ids) > 5:
+        raise HTTPException(400, "Maximum of 5 verification reports per batch.")
+
+    parsed_ids = []
+    for s in raw_ids:
+        try:
+            parsed_ids.append(int(s))
+        except ValueError:
+            raise HTTPException(400, f"Invalid verification ID: {s}")
+
+    snapshots = []
+    with connect() as conn:
+        for vid in parsed_ids:
+            row = conn.execute("SELECT * FROM verifications WHERE id=?", (vid,)).fetchone()
+            if not row or row["user_id"] != user["id"]:
+                raise HTTPException(404, "Verification report not found.")
+            snapshots.append(row_to_snapshot(dict(row)))
+
+    pdf_bytes = build_batch_report_pdf(snapshots, verifier_email=user["email"])
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": 'attachment; filename="AuthenTra-Report-Batch.pdf"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@app.get("/api/verifications/{id}/report.pdf")
+def single_verification_report(id: int, user: User):
+    role = canonical_role(user["role"])
+    if role in (ROLE_SYSTEM_ADMIN, ROLE_INSTITUTION_ADMIN):
+        raise HTTPException(403, "Administrators do not have verification report permissions.")
+
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM verifications WHERE id=?", (id,)).fetchone()
+
+    if not row or row["user_id"] != user["id"]:
+        raise HTTPException(404, "Verification report not found.")
+
+    snapshot = row_to_snapshot(dict(row))
+    pdf_bytes = build_report_pdf(snapshot, verifier_email=user["email"])
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="AuthenTra-Report-{id}.pdf"',
+            "Cache-Control": "no-store",
+        },
+    )
+
 
 REGISTRATION_LOCK = threading.Lock()
 

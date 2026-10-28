@@ -2375,6 +2375,20 @@ td strong {
   background: rgba(59, 130, 246, 0.15);
 }
 
+.visual-bbox.selected {
+  border-color: #b91c1c;
+  background: rgba(239, 68, 68, 0.35);
+  box-shadow: 0 0 10px rgba(239, 68, 68, 0.8);
+  z-index: 10;
+}
+
+.visual-canvas-image {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
 .region-card {
   padding: 8px 10px;
   border-radius: 6px;
@@ -3555,12 +3569,6 @@ td strong {
   line-height: 1.6;
 }
 
-.evidence-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 20px;
-}
-
 .metric-grid {
   display: flex;
   justify-content: space-between;
@@ -3725,9 +3733,6 @@ td strong {
   }
   .stat-card {
     padding: 16px;
-  }
-  .evidence-grid {
-    grid-template-columns: 1fr;
   }
   .check-grid {
     grid-template-columns: 1fr 1fr;
@@ -4165,8 +4170,7 @@ td strong {
 .upload-file-card,
 .institution-card,
 .action-queue-card,
-.gap-card,
-.evidence-grid > div {
+.gap-card {
   transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1),
               box-shadow 0.22s cubic-bezier(0.16, 1, 0.3, 1),
               border-color 0.22s ease;

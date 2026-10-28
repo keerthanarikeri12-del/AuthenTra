@@ -345,10 +345,17 @@ def compare_fields(registered_record: Optional[Dict[str, Any]], extracted_fields
         overall_status = "INSUFFICIENT_DATA"
         summary_explanation = "No fields could be reliably extracted or compared against the reference record."
 
+    if "certificate_reference" in field_results and "reference" not in field_results:
+        field_results["reference"] = field_results["certificate_reference"]
+    if "institution_name" in field_results and "institution" not in field_results:
+        field_results["institution"] = field_results["institution_name"]
+
     return {
         "status": overall_status,
         "schema_version": registered_record.get("metadata_schema_version", FIELD_SCHEMA_VERSION),
         "explanation": summary_explanation,
+        "critical_field_changed": critical_changed,
+        "all_fields_match": all_matched,
         "summary": counts,
         "fields": field_results,
         "commitment_verified": commitment_verified,

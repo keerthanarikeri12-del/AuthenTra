@@ -1,12 +1,13 @@
 import CertificateUpload from './CertificateUpload';
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  ShieldCheck, ScanLine, History, Building2, ChartNoAxesCombined, Workflow,
+  ShieldCheck, ScanLine, History, Building2, Workflow,
   ArrowUpRight, ArrowRight, UploadCloud, FileText, Check, X, Clock3,
   LockKeyhole, Fingerprint, ChevronRight, LogOut, Download, AlertTriangle,
   CircleHelp, Search, Layers3, Activity, BrainCircuit, CheckCircle2,
-  LoaderCircle, Plus, Ban, Copy, Menu
+  LoaderCircle, Plus, Ban, Copy, Menu, Binary
 } from 'lucide-react';
+import { downloadVerificationPdf, isUserRole } from './reportUtils';
 
 const ROLE_USER = 'USER';
 const ROLE_INSTITUTION_ADMIN = 'INSTITUTION_ADMIN';
@@ -222,7 +223,7 @@ function useScrollReveal(dependency) {
     );
 
     const elements = document.querySelectorAll(
-      '.panel, .stat-card, .dashboard-hero, .architecture-intro, .gap-card, .evidence-grid > div, .login-inner, .story-content, .recent-panel, .action-queue-card, .institution-card'
+      '.panel, .stat-card, .dashboard-hero, .architecture-intro, .gap-card, .login-inner, .story-content, .recent-panel, .action-queue-card, .institution-card'
     );
     elements.forEach(el => {
       el.classList.add('scroll-reveal');
@@ -760,9 +761,248 @@ function Verification({health, onChange, user}) {
   );
 }
 
+function HashVisualDiff({ fileHash, registeredHash, isMatch, isMismatch }) {
+  if (!fileHash) return null;
+  const [viewMode, setViewMode] = useState('chunks');
+
+  const fh = fileHash ? fileHash.toLowerCase() : '';
+  const rh = registeredHash ? registeredHash.toLowerCase() : '';
+  const hasReg = Boolean(rh && rh.length === 64);
+
+  const diffs = [];
+  let diffCount = 0;
+  if (hasReg) {
+    for (let i = 0; i < 64; i++) {
+      const match = fh[i] === rh[i];
+      if (!match) diffCount++;
+      diffs.push({
+        index: i,
+        fileChar: fh[i] || '',
+        regChar: rh[i] || '',
+        match
+      });
+    }
+  }
+
+  const chunks = [];
+  if (hasReg) {
+    for (let i = 0; i < 64; i += 8) {
+      chunks.push(diffs.slice(i, i + 8));
+    }
+  }
+
+  return (
+    <div className="hash-visual-diff-card" style={{marginTop: '10px', padding: '14px', background: '#fff', border: '1px solid #e2e8f0', borderRadius: '8px'}}>
+      <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px', marginBottom: '10px'}}>
+        <div style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
+          <Binary size={16} color="var(--primary,#087d6a)"/>
+          <strong style={{fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.5px', color: '#1e293b'}}>
+            SHA-256 Character Verification & Diff
+          </strong>
+        </div>
+        <div style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
+          {hasReg && (
+            <span style={{
+              fontSize: '11px',
+              fontWeight: 700,
+              padding: '3px 8px',
+              borderRadius: '12px',
+              background: diffCount === 0 ? '#dcfce7' : '#fee2e2',
+              color: diffCount === 0 ? '#15803d' : '#b91c1c'
+            }}>
+              {diffCount === 0 ? '✓ 64/64 Hex Characters Matched (100%)' : `⚠ ${diffCount} of 64 Characters Differ`}
+            </span>
+          )}
+          {hasReg && (
+            <button
+              type="button"
+              className="ghost-button"
+              style={{fontSize: '10px', padding: '2px 6px', color: '#64748b', border: '1px solid #cbd5e1', borderRadius: '4px', cursor: 'pointer'}}
+              onClick={() => setViewMode(viewMode === 'chunks' ? 'stream' : 'chunks')}
+            >
+              {viewMode === 'chunks' ? 'Show Full Stream' : 'Show Chunks'}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {hasReg && diffCount === 0 && (
+        <div style={{padding: '10px 12px', background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: '6px', marginBottom: '12px', color: '#065f46', fontSize: '12px', lineHeight: 1.5}}>
+          <strong style={{display: 'block', marginBottom: '2px'}}>✓ Complete Cryptographic Match (64 / 64 Characters)</strong>
+          The cryptographic SHA-256 digest of your uploaded file is completely identical to the on-chain registered record. Every byte and visual pixel is verified authentic and unaltered.
+        </div>
+      )}
+
+      {hasReg && diffCount > 0 && (
+        <div style={{padding: '10px 12px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '6px', marginBottom: '12px', color: '#991b1b', fontSize: '12px', lineHeight: 1.5}}>
+          <strong style={{display: 'block', marginBottom: '2px'}}>⚠ Cryptographic Hash Mismatch: {diffCount} Hex Characters Differ</strong>
+          Because SHA-256 has the avalanche effect, modifying even a single character, grade, or pixel completely scrambles the output hash. Red-highlighted characters below indicate the exact points of divergence between the uploaded file and the immutable blockchain record.
+        </div>
+      )}
+
+      {!hasReg && (
+        <div style={{padding: '10px 12px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '6px', marginBottom: '12px', color: '#64748b', fontSize: '12px'}}>
+          No registered on-chain hash was found for this certificate reference. Uploaded file digest is displayed below.
+        </div>
+      )}
+
+      {hasReg && viewMode === 'chunks' && (
+        <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '8px', marginBottom: '10px'}}>
+          {chunks.map((chunk, cIdx) => {
+            const chunkHasDiff = chunk.some(c => !c.match);
+            return (
+              <div
+                key={cIdx}
+                style={{
+                  padding: '8px 10px',
+                  background: chunkHasDiff ? '#fff5f5' : '#f0fdf4',
+                  border: `1px solid ${chunkHasDiff ? '#fecaca' : '#bbf7d0'}`,
+                  borderRadius: '6px',
+                  fontFamily: 'monospace'
+                }}
+              >
+                <div style={{display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: '#64748b', marginBottom: '4px'}}>
+                  <span>Chars {cIdx * 8 + 1}–{cIdx * 8 + 8}</span>
+                  <span style={{color: chunkHasDiff ? '#dc2626' : '#15803d', fontWeight: 600}}>
+                    {chunkHasDiff ? '✕ Divergence' : '✓ Matched'}
+                  </span>
+                </div>
+                <div style={{display: 'flex', flexDirection: 'column', gap: '4px'}}>
+                  <div style={{display: 'flex', alignItems: 'center', gap: '4px'}}>
+                    <span style={{fontSize: '9px', width: '42px', color: '#64748b', textTransform: 'uppercase'}}>File:</span>
+                    <div style={{display: 'flex', gap: '2px'}}>
+                      {chunk.map(c => (
+                        <span
+                          key={c.index}
+                          style={{
+                            display: 'inline-block',
+                            width: '18px',
+                            height: '22px',
+                            lineHeight: '22px',
+                            textAlign: 'center',
+                            fontSize: '12px',
+                            fontWeight: 700,
+                            borderRadius: '3px',
+                            background: c.match ? '#dcfce7' : '#fee2e2',
+                            color: c.match ? '#166534' : '#b91c1c',
+                            border: `1px solid ${c.match ? '#86efac' : '#ef4444'}`
+                          }}
+                          title={`Char #${c.index + 1}: uploaded '${c.fileChar}' vs registered '${c.regChar}'`}
+                        >
+                          {c.fileChar}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                  <div style={{display: 'flex', alignItems: 'center', gap: '4px'}}>
+                    <span style={{fontSize: '9px', width: '42px', color: '#64748b', textTransform: 'uppercase'}}>Chain:</span>
+                    <div style={{display: 'flex', gap: '2px'}}>
+                      {chunk.map(c => (
+                        <span
+                          key={c.index}
+                          style={{
+                            display: 'inline-block',
+                            width: '18px',
+                            height: '22px',
+                            lineHeight: '22px',
+                            textAlign: 'center',
+                            fontSize: '12px',
+                            fontWeight: 700,
+                            borderRadius: '3px',
+                            background: c.match ? '#dcfce7' : '#fee2e2',
+                            color: c.match ? '#166534' : '#b91c1c',
+                            border: `1px solid ${c.match ? '#86efac' : '#ef4444'}`
+                          }}
+                          title={`Char #${c.index + 1}: registered '${c.regChar}'`}
+                        >
+                          {c.regChar}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {hasReg && viewMode === 'stream' && (
+        <div style={{overflowX: 'auto', padding: '10px', background: '#f8fafc', borderRadius: '6px', border: '1px solid #e2e8f0', marginBottom: '10px'}}>
+          <div style={{display: 'flex', flexDirection: 'column', gap: '6px', fontFamily: 'monospace'}}>
+            <div style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
+              <span style={{fontSize: '10px', width: '64px', color: '#64748b', fontWeight: 600}}>FILE:</span>
+              <div style={{display: 'flex', gap: '1px'}}>
+                {diffs.map(c => (
+                  <span
+                    key={c.index}
+                    style={{
+                      display: 'inline-block',
+                      width: '15px',
+                      height: '20px',
+                      lineHeight: '20px',
+                      textAlign: 'center',
+                      fontSize: '11px',
+                      fontWeight: 700,
+                      background: c.match ? '#dcfce7' : '#fee2e2',
+                      color: c.match ? '#166534' : '#b91c1c',
+                      borderBottom: `2px solid ${c.match ? '#15803d' : '#dc2626'}`
+                    }}
+                    title={`Pos ${c.index + 1}: File='${c.fileChar}', Chain='${c.regChar}'`}
+                  >
+                    {c.fileChar}
+                  </span>
+                ))}
+              </div>
+            </div>
+            <div style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
+              <span style={{fontSize: '10px', width: '64px', color: '#64748b', fontWeight: 600}}>CHAIN:</span>
+              <div style={{display: 'flex', gap: '1px'}}>
+                {diffs.map(c => (
+                  <span
+                    key={c.index}
+                    style={{
+                      display: 'inline-block',
+                      width: '15px',
+                      height: '20px',
+                      lineHeight: '20px',
+                      textAlign: 'center',
+                      fontSize: '11px',
+                      fontWeight: 700,
+                      background: c.match ? '#dcfce7' : '#fee2e2',
+                      color: c.match ? '#166534' : '#b91c1c',
+                      borderBottom: `2px solid ${c.match ? '#15803d' : '#dc2626'}`
+                    }}
+                    title={`Pos ${c.index + 1}: Registered='${c.regChar}'`}
+                  >
+                    {c.regChar}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!hasReg && (
+        <div style={{padding: '10px', background: '#f8fafc', borderRadius: '6px', border: '1px solid #e2e8f0', fontFamily: 'monospace', fontSize: '12px'}}>
+          <span style={{color: '#64748b', fontSize: '10px', display: 'block', marginBottom: '4px'}}>FILE SHA-256 (HEX):</span>
+          <code style={{wordBreak: 'break-all', color: '#0f172a', fontWeight: 600}}>{fileHash}</code>
+        </div>
+      )}
+
+      <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '10px', color: '#94a3b8', marginTop: '6px'}}>
+        <span>Green = Matched character · Red = Tampered / altered character</span>
+        <span>SHA-256 Digest: 256 bits (64 hex characters)</span>
+      </div>
+    </div>
+  );
+}
+
 function FieldComparisonView({ fa }) {
   if (!fa) return null;
-  if (fa.status === 'UNAVAILABLE') {
+  const isUnavailable = !fa || fa.status?.toUpperCase() === 'UNAVAILABLE';
+  if (isUnavailable) {
     return (
       <div className="feature-section" style={{marginTop: '14px', padding: '12px 14px', border: '1px solid #e2e8f0', borderRadius: '7px', background: '#f8fafc'}}>
         <div style={{display: 'flex', alignItems: 'center', gap: '8px', color: '#64748b', marginBottom: '4px'}}>
@@ -772,25 +1012,38 @@ function FieldComparisonView({ fa }) {
           </span>
         </div>
         <p style={{fontSize: '12px', color: '#64748b', margin: 0}}>
-          {fa.message || 'Authenticated reference metadata is unavailable for this registration. Legacy records without confirmed issuer metadata cannot be compared at field level.'}
+          {fa.explanation || fa.message || 'Authenticated reference metadata is unavailable for this registration. Legacy records without confirmed issuer metadata cannot be compared at field level.'}
         </p>
       </div>
     );
   }
 
   const fields = fa.fields || {};
-  const fieldKeys = ['reference', 'recipient_name', 'institution', 'course', 'issue_date', 'grade'];
-  const labelsMap = {
-    reference: 'Certificate Reference',
-    recipient_name: 'Recipient Name',
-    institution: 'Issuing Institution',
-    course: 'Course / Qualification',
-    issue_date: 'Issue Date',
-    grade: 'Grade / Result'
-  };
+  const fieldKeys = [
+    ['reference', 'Certificate Reference', ['reference', 'certificate_reference', 'id', 'certificate_id']],
+    ['recipient_name', 'Recipient Name', ['recipient_name', 'name', 'student_name']],
+    ['institution', 'Issuing Institution', ['institution', 'institution_name', 'issuer']],
+    ['course', 'Course / Qualification', ['course', 'qualification', 'degree']],
+    ['issue_date', 'Issue Date', ['issue_date', 'date']],
+    ['grade', 'Grade / Result', ['grade', 'result', 'classification']]
+  ];
 
-  const hasAnyField = fieldKeys.some(k => fields[k]);
+  const resolvedFields = {};
+  for (const [canonicalKey, label, aliases] of fieldKeys) {
+    for (const alias of aliases) {
+      if (fields[alias]) {
+        resolvedFields[canonicalKey] = { ...fields[alias], label };
+        break;
+      }
+    }
+  }
+
+  const hasAnyField = Object.keys(resolvedFields).length > 0;
   if (!hasAnyField) return null;
+
+  const isCriticalChanged = fa.critical_field_changed === true || fa.status === 'CRITICAL_FIELDS_CHANGED';
+  const isAnyChanged = fa.status === 'FIELDS_CHANGED' || isCriticalChanged || (fa.summary?.changed || 0) > 0;
+  const isAllMatched = fa.all_fields_match === true || fa.status === 'ALL_MATCHED' || (!isAnyChanged && (fa.summary?.matched || 0) > 0);
 
   return (
     <div className="feature-section" style={{marginTop: '14px', padding: '12px 14px', border: '1px solid #e2e8f0', borderRadius: '7px', background: '#fff'}}>
@@ -798,47 +1051,97 @@ function FieldComparisonView({ fa }) {
         <div style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
           <FileText size={16} color="var(--primary,#087d6a)"/>
           <span style={{fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', color: '#1e293b'}}>
-            Field-Level Change Detection
+            Field-Level Change Detection (OCR vs Reference)
           </span>
           <span className="reference-pill mono" style={{fontSize: '10px', background: '#f1f5f9', padding: '2px 6px', borderRadius: '4px'}}>
             Schema v{fa.schema_version || '2026.1'}
           </span>
         </div>
-        <div style={{display: 'flex', alignItems: 'center', gap: '10px', fontSize: '11px'}}>
+        <div style={{display: 'flex', alignItems: 'center', gap: '10px', fontSize: '11px', flexWrap: 'wrap'}}>
           {fa.commitment_verified != null && (
             <span style={{color: fa.commitment_verified ? '#15803d' : '#b91c1c', fontWeight: 600}}>
               {fa.commitment_verified ? '● Issuer Commitment Verified' : '✕ Commitment Mismatch'}
             </span>
           )}
-          <span style={{color: fa.critical_field_changed ? '#b91c1c' : '#15803d', fontWeight: 600}}>
-            {fa.critical_field_changed ? '⚠ Critical Fields Changed' : '✓ Critical Fields Match'}
+          <span style={{
+            color: isCriticalChanged ? '#b91c1c' : isAnyChanged ? '#b45309' : isAllMatched ? '#15803d' : '#64748b',
+            fontWeight: 700,
+            background: isCriticalChanged ? '#fee2e2' : isAnyChanged ? '#fef3c7' : isAllMatched ? '#dcfce7' : '#f1f5f9',
+            padding: '2px 8px',
+            borderRadius: '10px'
+          }}>
+            {isCriticalChanged ? '⚠ Critical Fields Altered' : isAnyChanged ? '⚠ Field Discrepancies' : isAllMatched ? '✓ All Fields Match Reference' : 'Advisory Field Analysis'}
           </span>
         </div>
       </div>
 
+      <div style={{
+        padding: '8px 12px',
+        borderRadius: '6px',
+        marginBottom: '10px',
+        fontSize: '12px',
+        lineHeight: 1.4,
+        background: isCriticalChanged ? '#fef2f2' : isAnyChanged ? '#fffbeb' : isAllMatched ? '#f0fdf4' : '#f8fafc',
+        borderLeft: `4px solid ${isCriticalChanged ? '#dc2626' : isAnyChanged ? '#d97706' : isAllMatched ? '#059669' : '#94a3b8'}`,
+        color: isCriticalChanged ? '#991b1b' : isAnyChanged ? '#92400e' : isAllMatched ? '#065f46' : '#475569'
+      }}>
+        {fa.explanation || (isAllMatched ? 'All extracted fields match authenticated reference values confirmed by the issuing institution.' : isCriticalChanged ? 'Extracted document text differs from authenticated institutional records in critical credential fields.' : 'Field comparison completed against registered reference.')}
+      </div>
+
       <div style={{overflowX: 'auto'}}>
-        <table className="field-comparison-table">
+        <table className="field-comparison-table" style={{width: '100%', borderCollapse: 'collapse', fontSize: '12px'}}>
           <thead>
-            <tr>
-              <th>Field</th>
-              <th>Registered (Confirmed)</th>
-              <th>Observed (Document)</th>
-              <th>Status</th>
-              <th>Comparison Detail</th>
+            <tr style={{background: '#f8fafc', borderBottom: '2px solid #e2e8f0', textAlign: 'left'}}>
+              <th style={{padding: '8px 10px'}}>Field</th>
+              <th style={{padding: '8px 10px'}}>Registered (Confirmed)</th>
+              <th style={{padding: '8px 10px'}}>Observed (Document)</th>
+              <th style={{padding: '8px 10px'}}>Status</th>
+              <th style={{padding: '8px 10px'}}>Comparison Detail</th>
             </tr>
           </thead>
           <tbody>
-            {fieldKeys.map(k => {
-              const f = fields[k];
+            {fieldKeys.map(([k, label]) => {
+              const f = resolvedFields[k];
               if (!f) return null;
-              const statusClass = 'field-tag field-tag-' + (f.status || 'missing').toLowerCase();
+              const statusStr = (f.status || 'unknown').toLowerCase();
+              const isFieldChanged = statusStr === 'changed';
+              const isFieldMatched = statusStr === 'matched';
               return (
-                <tr key={k}>
-                  <td style={{fontWeight: 600, color: '#334155'}}>{labelsMap[k] || k}</td>
-                  <td className="mono" style={{color: f.registered_value ? '#0f172a' : '#94a3b8'}}>{f.registered_value || '—'}</td>
-                  <td className="mono" style={{color: f.observed_value ? '#0f172a' : '#94a3b8'}}>{f.observed_value || '—'}</td>
-                  <td><span className={statusClass}>{f.status || 'unknown'}</span></td>
-                  <td style={{color: '#64748b', fontSize: '11px'}}>{f.explanation || '—'}</td>
+                <tr key={k} style={{borderBottom: '1px solid #f1f5f9', background: isFieldChanged ? '#fff5f5' : 'transparent'}}>
+                  <td style={{padding: '8px 10px', fontWeight: 600, color: '#334155'}}>
+                    {label}
+                    {f.is_critical && <span style={{marginLeft: '4px', color: '#dc2626', fontSize: '10px'}} title="Critical field">*</span>}
+                  </td>
+                  <td className="mono" style={{padding: '8px 10px', color: f.registered_value ? '#0f172a' : '#94a3b8'}}>
+                    {f.registered_value ? <span style={{color: '#15803d', fontWeight: 600}}>{f.registered_value}</span> : '—'}
+                  </td>
+                  <td className="mono" style={{padding: '8px 10px', color: f.observed_value ? '#0f172a' : '#94a3b8'}}>
+                    {f.observed_value ? (
+                      <span style={{
+                        color: isFieldChanged ? '#b91c1c' : '#0f172a',
+                        fontWeight: isFieldChanged ? 700 : 500,
+                        background: isFieldChanged ? '#fee2e2' : 'transparent',
+                        padding: isFieldChanged ? '2px 4px' : '0',
+                        borderRadius: '3px'
+                      }}>
+                        {f.observed_value}
+                      </span>
+                    ) : '—'}
+                  </td>
+                  <td style={{padding: '8px 10px'}}>
+                    <span className={'field-tag field-tag-' + statusStr} style={{
+                      display: 'inline-block',
+                      padding: '2px 7px',
+                      borderRadius: '4px',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      background: isFieldMatched ? '#dcfce7' : isFieldChanged ? '#fee2e2' : '#f1f5f9',
+                      color: isFieldMatched ? '#15803d' : isFieldChanged ? '#b91c1c' : '#64748b'
+                    }}>
+                      {isFieldMatched ? '✓ Matched' : isFieldChanged ? '✕ Altered' : f.status}
+                    </span>
+                  </td>
+                  <td style={{padding: '8px 10px', color: '#64748b', fontSize: '11px'}}>{f.explanation || '—'}</td>
                 </tr>
               );
             })}
@@ -847,15 +1150,16 @@ function FieldComparisonView({ fa }) {
       </div>
 
       <p className="muted" style={{marginTop: '8px', fontSize: '10px', color: '#94a3b8', lineHeight: 1.4}}>
-        Deterministic comparison with conservative normalizers. Unreadable or missing fields represent extraction uncertainty, not confirmed alterations.
+        Deterministic comparison using conservative normalizers. Unreadable or missing fields indicate OCR extraction uncertainty, not confirmed alterations.
       </p>
     </div>
   );
 }
 
-function VisualTamperingView({ vt }) {
+function VisualTamperingView({ vt, preview }) {
   if (!vt) return null;
-  if (vt.status === 'UNAVAILABLE') {
+  const isUnavailable = !vt || vt.status?.toUpperCase() === 'UNAVAILABLE';
+  if (isUnavailable) {
     return (
       <div className="feature-section" style={{marginTop: '14px', padding: '12px 14px', border: '1px solid #e2e8f0', borderRadius: '7px', background: '#f8fafc'}}>
         <div style={{display: 'flex', alignItems: 'center', gap: '8px', color: '#64748b', marginBottom: '4px'}}>
@@ -865,14 +1169,16 @@ function VisualTamperingView({ vt }) {
           </span>
         </div>
         <p style={{fontSize: '12px', color: '#64748b', margin: 0}}>
-          {vt.message || 'Visual tampering analysis is currently unavailable.'}
+          {vt.message || vt.accessible_description || 'Visual tampering analysis is currently unavailable.'}
         </p>
       </div>
     );
   }
 
-  const regions = vt.suspicious_regions || [];
+  const [selectedRegion, setSelectedRegion] = useState(null);
+  const regions = vt.regions || vt.suspicious_regions || [];
   const hasRegions = regions.length > 0;
+  const isSuspicious = vt.status === 'suspicious_regions_detected' || hasRegions;
 
   return (
     <div className="feature-section" style={{marginTop: '14px', padding: '12px 14px', border: '1px solid #e2e8f0', borderRadius: '7px', background: '#fff'}}>
@@ -884,9 +1190,9 @@ function VisualTamperingView({ vt }) {
           </span>
         </div>
         <div style={{display: 'flex', alignItems: 'center', gap: '10px', fontSize: '11px', color: '#64748b'}}>
-          <span>Model / Method: <strong>{vt.model_provenance || vt.method || 'Error Level Analysis'}</strong></span>
+          <span>Model / Method: <strong>{vt.model_provenance || vt.method || 'Error Level Analysis (ELA)'}</strong></span>
           {vt.anomaly_score != null && (
-            <span style={{fontWeight: 600, color: vt.anomaly_score > 0.4 ? '#b91c1c' : '#15803d'}}>
+            <span style={{fontWeight: 700, color: vt.anomaly_score > 0.4 ? '#b91c1c' : '#15803d'}}>
               Max Anomaly: {Math.round(vt.anomaly_score * 100)}%
             </span>
           )}
@@ -895,72 +1201,147 @@ function VisualTamperingView({ vt }) {
 
       <div className="visual-overlay-container">
         <div>
-          <div className="visual-canvas-mock" aria-label="Visual tampering preview canvas" role="img">
-            <div style={{padding: '12px', height: '100%', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', justifyContent: 'space-between'}}>
-              <div style={{height: '6px', width: '35%', background: '#e2e8f0', borderRadius: '3px'}}></div>
-              <div>
-                <div style={{height: '4px', width: '80%', background: '#f1f5f9', margin: '4px 0'}}></div>
-                <div style={{height: '4px', width: '60%', background: '#f1f5f9', margin: '4px 0'}}></div>
-                <div style={{height: '4px', width: '70%', background: '#f1f5f9', margin: '4px 0'}}></div>
+          <div
+            className="visual-canvas-mock"
+            aria-label="Visual tampering preview canvas"
+            role="img"
+            style={{
+              position: 'relative',
+              borderRadius: '6px',
+              border: '1px solid #cbd5e1',
+              background: '#f8fafc',
+              overflow: 'hidden',
+              minHeight: '260px'
+            }}
+          >
+            {preview ? (
+              <img
+                src={preview}
+                alt={`Certificate preview page ${vt.analyzed_page || vt.page || 1}`}
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  objectFit: 'contain',
+                  display: 'block',
+                  background: '#fff'
+                }}
+              />
+            ) : (
+              <div style={{padding: '24px 16px', textAlign: 'center', color: '#64748b', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '240px'}}>
+                <FileText size={36} color="#94a3b8" style={{marginBottom: '8px'}}/>
+                <strong style={{fontSize: '12px', color: '#334155'}}>Document Page {vt.analyzed_page || vt.page || 1}</strong>
+                <span style={{fontSize: '11px', color: '#94a3b8', marginTop: '4px'}}>
+                  {hasRegions ? `${regions.length} suspicious bounding boxes mapped` : 'No anomalies detected'}
+                </span>
               </div>
-              <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
-                <div style={{height: '8px', width: '20%', background: '#e2e8f0', borderRadius: '2px'}}></div>
-                <div style={{height: '14px', width: '14px', borderRadius: '50%', border: '1px solid #cbd5e1'}}></div>
-              </div>
-            </div>
-            <div className="visual-canvas-overlay">
+            )}
+            <div className="visual-canvas-overlay" style={{position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none'}}>
               {regions.map((reg, idx) => {
-                const [x, y, w, h] = reg.bbox || [0, 0, 0, 0];
+                const [x, y, w, h] = reg.box || reg.bbox || [0, 0, 0, 0];
                 const isRef = reg.type === 'reference_difference';
+                const isSelected = selectedRegion === idx;
                 return (
                   <div
                     key={idx}
-                    className={`visual-bbox ${isRef ? 'type-reference' : ''}`}
+                    className={`visual-bbox ${isRef ? 'type-reference' : ''} ${isSelected ? 'selected' : ''}`}
                     style={{
-                      left: `${Math.max(0, Math.min(95, x * 100))}%`,
-                      top: `${Math.max(0, Math.min(95, y * 100))}%`,
-                      width: `${Math.max(4, Math.min(100, w * 100))}%`,
-                      height: `${Math.max(4, Math.min(100, h * 100))}%`
+                      position: 'absolute',
+                      left: `${Math.max(0, Math.min(96, x * 100))}%`,
+                      top: `${Math.max(0, Math.min(96, y * 100))}%`,
+                      width: `${Math.max(3, Math.min(100 - x * 100, w * 100))}%`,
+                      height: `${Math.max(3, Math.min(100 - y * 100, h * 100))}%`,
+                      pointerEvents: 'auto',
+                      cursor: 'pointer',
+                      border: isSelected ? '3px solid #b91c1c' : isRef ? '2px solid #2563eb' : '2px solid #ef4444',
+                      background: isSelected ? 'rgba(239, 68, 68, 0.4)' : isRef ? 'rgba(37, 99, 235, 0.2)' : 'rgba(239, 68, 68, 0.22)',
+                      boxShadow: isSelected ? '0 0 10px rgba(239, 68, 68, 0.8)' : '0 1px 3px rgba(0,0,0,0.2)',
+                      borderRadius: '2px',
+                      zIndex: isSelected ? 10 : 2,
+                      transition: 'all 0.15s ease-in-out'
                     }}
-                    title={`Region #${idx + 1}: ${reg.explanation || reg.type}`}
-                  />
+                    onClick={() => setSelectedRegion(selectedRegion === idx ? null : idx)}
+                    title={`Region #${idx + 1}: ${reg.explanation || reg.label || reg.type}`}
+                  >
+                    <span style={{
+                      position: 'absolute',
+                      top: '-15px',
+                      left: '0',
+                      background: isRef ? '#2563eb' : '#dc2626',
+                      color: '#fff',
+                      fontSize: '9px',
+                      fontWeight: 700,
+                      padding: '1px 4px',
+                      borderRadius: '2px',
+                      lineHeight: 1,
+                      whiteSpace: 'nowrap',
+                      boxShadow: '0 1px 2px rgba(0,0,0,0.2)'
+                    }}>
+                      #{idx + 1}
+                    </span>
+                  </div>
                 );
               })}
             </div>
           </div>
           <small style={{display: 'block', textAlign: 'center', color: '#94a3b8', fontSize: '10px', marginTop: '4px'}}>
-            Rendered Preview Overlay (Page {vt.analyzed_page || 1})
+            Rendered Preview Overlay (Page {vt.analyzed_page || vt.page || 1})
+            {hasRegions && ' · Click any box or region card to inspect'}
           </small>
         </div>
 
         <div>
-          {hasRegions ? (
+          {isSuspicious && hasRegions ? (
             <div>
-              <strong style={{fontSize: '11px', textTransform: 'uppercase', color: '#475569', display: 'block', marginBottom: '6px'}}>
-                Identified Suspicious Regions ({regions.length})
-              </strong>
-              {regions.map((reg, idx) => (
-                <div key={idx} className="region-card">
-                  <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px'}}>
-                    <strong style={{color: reg.type === 'reference_difference' ? '#2563eb' : '#dc2626'}}>
-                      Region #{idx + 1} ({reg.type === 'reference_difference' ? 'Reference Delta' : 'Model Discontinuity'})
-                    </strong>
-                    <span className="mono" style={{color: '#64748b', fontSize: '10px'}}>
-                      Score: {reg.score != null ? Math.round(reg.score * 100) + '%' : '—'}
-                    </span>
-                  </div>
-                  <p style={{margin: '2px 0', color: '#334155'}}>{reg.explanation}</p>
-                  <small className="mono" style={{color: '#94a3b8', fontSize: '9px'}}>
-                    BBox: [{(reg.bbox || []).map(v => typeof v === 'number' ? v.toFixed(3) : v).join(', ')}] · Page {reg.page || 1}
-                  </small>
+              <div style={{padding: '8px 10px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '6px', marginBottom: '8px'}}>
+                <div style={{display: 'flex', alignItems: 'center', gap: '6px', color: '#991b1b', marginBottom: '2px'}}>
+                  <AlertTriangle size={15}/>
+                  <strong style={{fontSize: '12px'}}>{regions.length} Suspicious Region{regions.length === 1 ? '' : 's'} Identified</strong>
                 </div>
-              ))}
+                <p style={{fontSize: '11px', color: '#7f1d1d', margin: 0}}>
+                  Error Level Analysis detected localized compression outliers. Highlights on document preview indicate potential spliced text or copied patches.
+                </p>
+              </div>
+
+              <div style={{maxHeight: '260px', overflowY: 'auto'}}>
+                {regions.map((reg, idx) => {
+                  const isSelected = selectedRegion === idx;
+                  const isRef = reg.type === 'reference_difference';
+                  const score = reg.confidence ?? reg.raw_score ?? reg.score;
+                  const box = reg.box || reg.bbox || [];
+                  return (
+                    <div
+                      key={idx}
+                      className="region-card"
+                      style={{
+                        cursor: 'pointer',
+                        borderColor: isSelected ? '#ef4444' : '#e2e8f0',
+                        background: isSelected ? '#fff5f5' : '#f8fafc',
+                        boxShadow: isSelected ? '0 0 0 1px #ef4444' : 'none'
+                      }}
+                      onClick={() => setSelectedRegion(isSelected ? null : idx)}
+                    >
+                      <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px'}}>
+                        <strong style={{color: isRef ? '#2563eb' : '#dc2626'}}>
+                          Region #{idx + 1} ({isRef ? 'Reference Delta' : 'Compression Discontinuity'})
+                        </strong>
+                        <span className="mono" style={{color: '#64748b', fontSize: '10px'}}>
+                          Score: {score != null ? Math.round(score * 100) + '%' : '—'}
+                        </span>
+                      </div>
+                      <p style={{margin: '2px 0', color: '#334155'}}>{reg.explanation || reg.label}</p>
+                      <small className="mono" style={{color: '#94a3b8', fontSize: '9px'}}>
+                        BBox: [{box.map(v => typeof v === 'number' ? v.toFixed(3) : v).join(', ')}] · Page {reg.page || 1}
+                      </small>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           ) : (
-            <div style={{padding: '16px', background: '#f8fafc', borderRadius: '6px', textAlign: 'center', color: '#64748b'}}>
+            <div style={{padding: '16px', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '6px', textAlign: 'center', color: '#166534'}}>
               <CheckCircle2 size={24} color="#15803d" style={{margin: '0 auto 6px'}}/>
-              <strong style={{display: 'block', fontSize: '12px', color: '#1e293b'}}>No Localized Visual Discontinuities Detected</strong>
-              <p style={{fontSize: '11px', margin: '4px 0 0'}}>
+              <strong style={{display: 'block', fontSize: '12px', color: '#14532d'}}>No Localized Visual Discontinuities Detected</strong>
+              <p style={{fontSize: '11px', margin: '4px 0 0', color: '#166534'}}>
                 Error level analysis and gradient checks found no localized patch manipulation anomalies exceeding threshold.
               </p>
             </div>
@@ -988,15 +1369,21 @@ function VisualTamperingView({ vt }) {
 
 function TransformationAdvisoryView({ ta }) {
   if (!ta) return null;
+  const outcome = ta.advisory_outcome || ta.outcome || ta.status || 'INSUFFICIENT_EVIDENCE';
+
   const outcomeLabels = {
+    MATCH_CONFIRMED: 'Exact Byte Match (Original Document)',
+    EXACT_MATCH: 'Exact Byte Match (Original Document)',
     FIELDS_AGREE_RESAVE_OR_REEXPORT: 'Fields Agree; Differences Consistent with Rescan or Re-Export',
-    CONTENT_DIFFERENCES_DETECTED: 'Content Differences Detected',
+    CONTENT_DIFFERENCES_DETECTED: 'Content Differences Detected (Text Modification)',
     MIXED_EVIDENCE_REVIEW_REQUIRED: 'Mixed Evidence; Human Review Required',
     INSUFFICIENT_EVIDENCE: 'Insufficient Evidence to Assess Transformation',
     UNAVAILABLE: 'Transformation Analysis Unavailable'
   };
 
   const outcomeColors = {
+    MATCH_CONFIRMED: { border: '#059669', bg: '#ecfdf5', text: '#065f46' },
+    EXACT_MATCH: { border: '#059669', bg: '#ecfdf5', text: '#065f46' },
     FIELDS_AGREE_RESAVE_OR_REEXPORT: { border: '#059669', bg: '#ecfdf5', text: '#065f46' },
     CONTENT_DIFFERENCES_DETECTED: { border: '#dc2626', bg: '#fef2f2', text: '#991b1b' },
     MIXED_EVIDENCE_REVIEW_REQUIRED: { border: '#d97706', bg: '#fffbeb', text: '#92400e' },
@@ -1004,7 +1391,23 @@ function TransformationAdvisoryView({ ta }) {
     UNAVAILABLE: { border: '#94a3b8', bg: '#f8fafc', text: '#64748b' }
   };
 
-  const cfg = outcomeColors[ta.outcome] || outcomeColors.INSUFFICIENT_EVIDENCE;
+  const cfg = outcomeColors[outcome] || outcomeColors.INSUFFICIENT_EVIDENCE;
+
+  const sharpness = ta.image_quality?.sharpness ?? ta.evidence?.image_quality?.sharpness_laplacian ?? ta.image_quality?.sharpness_laplacian;
+  const noise = ta.image_quality?.noise_sigma ?? ta.evidence?.image_quality?.noise_estimate ?? ta.image_quality?.noise_estimate;
+  const blockiness = ta.image_quality?.blockiness ?? ta.evidence?.image_quality?.blockiness;
+  const skew = ta.skew_angle ?? ta.evidence?.estimated_skew_degrees;
+  const ocr = ta.ocr_reliability ?? ta.evidence?.ocr_confidence;
+  const visualAnomaly = ta.visual_anomaly_score != null ? Math.round(ta.visual_anomaly_score * 100) + '%' : (ta.evidence?.visual_anomalies_detected ? 'Detected' : 'None');
+
+  const transTypeLabels = {
+    none: 'Original Digital File',
+    pdf_reexport: 'PDF Re-export / Print-to-PDF',
+    physical_scan_or_photo: 'Scanned Paper / Camera Photo',
+    image_recompression: 'Recompressed Image (JPEG Artifacts)',
+    re_saved_digital_copy: 'Re-saved Digital Copy',
+    unknown: 'Unclassified'
+  };
 
   return (
     <div className="feature-section" style={{marginTop: '14px', padding: '12px 14px', border: '1px solid #e2e8f0', borderRadius: '7px', background: '#fff'}}>
@@ -1015,14 +1418,21 @@ function TransformationAdvisoryView({ ta }) {
             Rescan & Compression Advisory
           </span>
         </div>
-        <span className="reference-pill mono" style={{fontSize: '10px', background: '#f1f5f9', padding: '2px 6px', borderRadius: '4px'}}>
-          Advisory Only
-        </span>
+        <div style={{display: 'flex', alignItems: 'center', gap: '6px'}}>
+          {ta.transformation_type && (
+            <span className="reference-pill mono" style={{fontSize: '10px', background: '#e0f2fe', color: '#0369a1', padding: '2px 8px', borderRadius: '4px', fontWeight: 600}}>
+              {transTypeLabels[ta.transformation_type] || ta.transformation_type}
+            </span>
+          )}
+          <span className="reference-pill mono" style={{fontSize: '10px', background: '#f1f5f9', padding: '2px 6px', borderRadius: '4px'}}>
+            Advisory Only
+          </span>
+        </div>
       </div>
 
       <div style={{padding: '10px 14px', borderRadius: '6px', borderLeft: `4px solid ${cfg.border}`, background: cfg.bg, marginBottom: '10px'}}>
         <strong style={{display: 'block', fontSize: '13px', color: cfg.text}}>
-          {outcomeLabels[ta.outcome] || ta.outcome}
+          {ta.headline || outcomeLabels[outcome] || outcome}
         </strong>
         <p style={{fontSize: '12px', color: cfg.text, margin: '4px 0 0', lineHeight: 1.5}}>
           {ta.explanation || 'Evaluated combined evidence from field comparisons, image blur/noise/blockiness, and document skew.'}
@@ -1032,27 +1442,45 @@ function TransformationAdvisoryView({ ta }) {
       <div className="transformation-grid">
         <div className="trans-metric">
           <small>Laplacian Sharpness</small>
-          <strong>{ta.image_quality?.sharpness != null ? ta.image_quality.sharpness.toFixed(1) : '—'}</strong>
+          <strong>{sharpness != null ? Number(sharpness).toFixed(1) : '—'}</strong>
+          <span style={{fontSize: '10px', color: sharpness != null && sharpness < 60 ? '#b91c1c' : '#15803d'}}>
+            {sharpness != null ? (sharpness < 60 ? 'Blurry' : 'Sharp') : ''}
+          </span>
         </div>
         <div className="trans-metric">
           <small>Noise Sigma</small>
-          <strong>{ta.image_quality?.noise_sigma != null ? ta.image_quality.noise_sigma.toFixed(2) : '—'}</strong>
+          <strong>{noise != null ? Number(noise).toFixed(2) : '—'}</strong>
+          <span style={{fontSize: '10px', color: noise != null && noise > 4.5 ? '#b45309' : '#15803d'}}>
+            {noise != null ? (noise > 4.5 ? 'Scan Noise' : 'Clean') : ''}
+          </span>
         </div>
         <div className="trans-metric">
           <small>8x8 Blockiness</small>
-          <strong>{ta.image_quality?.blockiness != null ? ta.image_quality.blockiness.toFixed(3) : '—'}</strong>
+          <strong>{blockiness != null ? Number(blockiness).toFixed(3) : '—'}</strong>
+          <span style={{fontSize: '10px', color: blockiness != null && blockiness > 12 ? '#b91c1c' : '#15803d'}}>
+            {blockiness != null ? (blockiness > 12 ? 'Heavy Compression' : 'Low Artifacts') : ''}
+          </span>
         </div>
         <div className="trans-metric">
           <small>Estimated Skew</small>
-          <strong>{ta.skew_angle != null ? `${ta.skew_angle.toFixed(1)}°` : '0.0°'}</strong>
+          <strong>{skew != null ? `${Number(skew).toFixed(1)}°` : '0.0°'}</strong>
+          <span style={{fontSize: '10px', color: skew != null && Math.abs(skew) > 0.8 ? '#b45309' : '#15803d'}}>
+            {skew != null ? (Math.abs(skew) > 0.8 ? 'Rotated/Skewed' : 'Upright') : ''}
+          </span>
         </div>
         <div className="trans-metric">
           <small>OCR Reliability</small>
-          <strong>{ta.ocr_reliability != null ? `${Math.round(ta.ocr_reliability)}%` : '—'}</strong>
+          <strong>{ocr != null ? `${Math.round(ocr)}%` : '—'}</strong>
+          <span style={{fontSize: '10px', color: ocr != null && ocr > 75 ? '#15803d' : '#b45309'}}>
+            {ocr != null ? (ocr > 75 ? 'High Fidelity' : 'Moderate') : ''}
+          </span>
         </div>
         <div className="trans-metric">
           <small>Visual Anomaly</small>
-          <strong>{ta.visual_anomaly_score != null ? `${Math.round(ta.visual_anomaly_score * 100)}%` : '—'}</strong>
+          <strong>{visualAnomaly}</strong>
+          <span style={{fontSize: '10px', color: visualAnomaly === 'None' || visualAnomaly === '0%' ? '#15803d' : '#b91c1c'}}>
+            {visualAnomaly === 'None' || visualAnomaly === '0%' ? 'Nominal' : 'Patch Anomaly'}
+          </span>
         </div>
       </div>
 
@@ -1075,6 +1503,10 @@ function ReviewRoutingView({ rr, reference, user }) {
   const [submitting, setSubmitting] = useState(false);
   const [statusMsg, setStatusMsg] = useState(null);
 
+  const outcome = rr.routing_outcome || rr.outcome || 'COMPLETED_NO_REVIEW';
+  const familiarity = rr.layout_familiarity ?? rr.layout_assessment?.familiarity_score;
+  const confidence = rr.calibrated_confidence ?? (rr.evidence_summary?.ocr_confidence != null ? rr.evidence_summary.ocr_confidence / 100 : null);
+
   const outcomeLabels = {
     COMPLETED_NO_REVIEW: 'Analysis Completed Without Additional Review',
     INSTITUTION_REVIEW_REQUIRED: 'Institution Review Required',
@@ -1091,7 +1523,7 @@ function ReviewRoutingView({ rr, reference, user }) {
     ANALYSIS_UNAVAILABLE: 'routing-banner'
   };
 
-  const bannerClass = outcomeBannerClasses[rr.routing_outcome] || 'routing-banner';
+  const bannerClass = outcomeBannerClasses[outcome] || 'routing-banner';
   const role = getCanonicalRole(user?.role);
   const isReviewer = role === ROLE_INSTITUTION_ADMIN || role === ROLE_SYSTEM_ADMIN;
 
@@ -1144,19 +1576,24 @@ function ReviewRoutingView({ rr, reference, user }) {
             Policy v{rr.policy_version || '2026.1'}
           </span>
         </div>
-        <div style={{display: 'flex', alignItems: 'center', gap: '10px', fontSize: '11px', color: '#64748b'}}>
-          {rr.layout_familiarity != null && (
-            <span>Layout Familiarity: <strong>{Math.round(rr.layout_familiarity * 100)}%</strong></span>
+        <div style={{display: 'flex', alignItems: 'center', gap: '10px', fontSize: '11px', color: '#64748b', flexWrap: 'wrap'}}>
+          {rr.target_reviewer && (
+            <span style={{background: '#fee2e2', color: '#991b1b', fontWeight: 600, padding: '2px 8px', borderRadius: '4px'}}>
+              Reviewer: {rr.target_reviewer === 'INSTITUTION_ADMIN' ? 'Issuing Institution' : rr.target_reviewer === 'SYSTEM_ADMIN' ? 'Platform Administrator' : rr.target_reviewer}
+            </span>
           )}
-          {rr.calibrated_confidence != null && (
-            <span>Calibrated Confidence: <strong>{Math.round(rr.calibrated_confidence * 100)}%</strong></span>
+          {familiarity != null && (
+            <span>Layout Familiarity: <strong>{Math.round(familiarity * 100)}%</strong> {rr.layout_assessment?.label ? `(${rr.layout_assessment.label})` : ''}</span>
+          )}
+          {confidence != null && (
+            <span>Calibrated Confidence: <strong>{Math.round(confidence * 100)}%</strong></span>
           )}
         </div>
       </div>
 
       <div className={bannerClass}>
         <strong style={{display: 'block', fontSize: '13px'}}>
-          {outcomeLabels[rr.routing_outcome] || rr.routing_outcome}
+          {outcomeLabels[outcome] || rr.headline || outcome}
         </strong>
         {rr.reasons && rr.reasons.length > 0 && (
           <ul style={{margin: '6px 0 0', paddingLeft: '18px', fontSize: '12px', lineHeight: 1.5}}>
@@ -1256,8 +1693,10 @@ function ReviewRoutingView({ rr, reference, user }) {
   );
 }
 
-function Result({result: r, autoScroll = true, user}) {
+function Result({result: r, autoScroll = true, user, preview}) {
   const ref = useRef();
+  const [downloadingPdf, setDownloadingPdf] = useState(false);
+  const [pdfError, setPdfError] = useState(null);
   useEffect(() => {
     if (autoScroll) ref.current?.scrollIntoView({behavior: 'smooth', block: 'nearest'});
   }, [r, autoScroll]);
@@ -1272,6 +1711,7 @@ function Result({result: r, autoScroll = true, user}) {
   const badgeClass = category === 'VERIFIED' ? 'verified' : (category === 'TAMPERING_DETECTED' || category === 'POSSIBLE_TAMPERING_OR_FILE_MISMATCH') ? 'possible_tampering' : (category === 'REVOKED' || category === 'ISSUER_NOT_AUTHORIZED') ? 'revoked' : category === 'INVALID_FILE' ? 'not_verified' : category === 'VERIFICATION_UNAVAILABLE' ? 'unable_to_authenticate' : 'inconclusive';
   const isHashMatch = r.hash_matches === true;
   const isHashMismatch = r.hash_matches === false;
+  const canDownload = isUserRole(user);
 
   return (
     <section ref={ref} className={'panel result-panel result-' + (r.status || 'unknown')} aria-live="polite">
@@ -1286,10 +1726,28 @@ function Result({result: r, autoScroll = true, user}) {
           <h2>{(r.status === 'possible_tampering' || category === 'TAMPERING_DETECTED' || category === 'POSSIBLE_TAMPERING_OR_FILE_MISMATCH') ? 'Possible Tampering or File Mismatch' : (r.label || labels[category] || category)}</h2>
           <p className="result-explanation" style={{marginTop: '4px', fontSize: '13px', lineHeight: 1.6}}>{r.message}</p>
         </div>
-        <button className="secondary small-button" onClick={() => saveFile('authentra-verification-' + (r.reference || 'report') + '.json', JSON.stringify(r, null, 2))}>
-          <Download size={16}/>Save report
-        </button>
+        <div style={{display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap'}}>
+          {canDownload && r.id && (
+            <button
+              type="button"
+              className="primary small-button"
+              disabled={downloadingPdf}
+              onClick={() => downloadVerificationPdf(r.id, r.reference, setDownloadingPdf, setPdfError)}
+              title="Download official PDF verification report"
+            >
+              <FileText size={16}/>{downloadingPdf ? 'Downloading…' : 'Download PDF report'}
+            </button>
+          )}
+          <button type="button" className="secondary small-button" onClick={() => saveFile('authentra-verification-' + (r.reference || 'report') + '.json', JSON.stringify(r, null, 2))}>
+            <Download size={16}/>Save report
+          </button>
+        </div>
       </div>
+      {pdfError && (
+        <div className="error-banner" style={{fontSize: '12px', padding: '8px 12px', margin: '8px 0', borderRadius: '4px', background: '#fee2e2', color: '#991b1b', border: '1px solid #f87171'}}>
+          <AlertTriangle size={14} style={{display: 'inline', verticalAlign: 'text-bottom', marginRight: '6px'}}/>{pdfError}
+        </div>
+      )}
 
       {r.next_action && (
         <div className="next-action-card" style={{margin: '12px 0', padding: '10px 14px', borderRadius: '7px', background: category === 'VERIFIED' ? '#eef7f2' : '#fdf6e7', borderLeft: `4px solid ${category === 'VERIFIED' ? 'var(--green,#087d6a)' : '#d97706'}`}}>
@@ -1303,9 +1761,13 @@ function Result({result: r, autoScroll = true, user}) {
           <small style={{display: 'block', color: 'var(--muted,#7b8b90)', fontWeight: 600, textTransform: 'uppercase', fontSize: '10px'}}>Hash Comparison</small>
           <div style={{display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px'}}>
             {isHashMatch ? <Check size={16} color="#087d6a"/> : isHashMismatch ? <X size={16} color="#dc2626"/> : <span>—</span>}
-            <strong style={{fontSize: '12px', color: isHashMatch ? '#087d6a' : isHashMismatch ? '#dc2626' : 'inherit'}}>{isHashMatch ? 'Exact Match' : isHashMismatch ? 'Hash Mismatch' : 'Not Compared'}</strong>
+            <strong style={{fontSize: '12px', color: isHashMatch ? '#087d6a' : isHashMismatch ? '#dc2626' : 'inherit'}}>
+              {isHashMatch ? 'Exact Match (64/64)' : isHashMismatch ? 'Hash Mismatch (Altered)' : 'Not Compared'}
+            </strong>
           </div>
-          <p style={{fontSize: '11px', color: '#6b7280', margin: '4px 0 0'}}>{r.hash_comparison || (isHashMatch ? 'Uploaded file exactly matches on-chain record.' : 'No hash comparison.')}</p>
+          <p style={{fontSize: '11px', color: '#6b7280', margin: '4px 0 0'}}>
+            {isHashMatch ? 'Uploaded file byte hash matches on-chain registered record.' : isHashMismatch ? 'File hash differs from blockchain record.' : (r.hash_comparison || 'No hash comparison.')}
+          </p>
         </div>
 
         <div className="evidence-card" style={{background: '#fff', border: '1px solid var(--line,#e5ebed)', borderRadius: '7px', padding: '10px 12px'}}>
@@ -1348,7 +1810,7 @@ function Result({result: r, autoScroll = true, user}) {
       </div>
 
       {r.field_analysis && <FieldComparisonView fa={r.field_analysis}/>}
-      {r.visual_tampering && <VisualTamperingView vt={r.visual_tampering}/>}
+      {r.visual_tampering && <VisualTamperingView vt={r.visual_tampering} preview={preview || r.preview}/>}
       {r.transformation_analysis && <TransformationAdvisoryView ta={r.transformation_analysis}/>}
       {r.review_routing && <ReviewRoutingView rr={r.review_routing} reference={r.reference} user={user}/>}
 
@@ -1381,14 +1843,11 @@ function Result({result: r, autoScroll = true, user}) {
       </div>
 
       {r.file_hash && (
-        <details style={{marginTop: '10px'}}>
+        <details style={{marginTop: '12px'}} open={isHashMatch || isHashMismatch}>
           <summary style={{cursor: 'pointer', fontSize: '12px', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px', color: '#4b5563'}}>
-            Cryptographic SHA-256 digests <ChevronRight size={14}/>
+            Cryptographic SHA-256 Digests & Character Verification <ChevronRight size={14}/>
           </summary>
-          <div className="hash-grid" style={{marginTop: '8px'}}>
-            <label>Uploaded file SHA-256 <code>{r.file_hash}</code></label>
-            <label>Registered on-chain SHA-256 <code>{r.registered_hash || 'No trusted record available on blockchain'}</code></label>
-          </div>
+          <HashVisualDiff fileHash={r.file_hash} registeredHash={r.registered_hash} isMatch={isHashMatch} isMismatch={isHashMismatch}/>
         </details>
       )}
 
@@ -1411,7 +1870,7 @@ function Result({result: r, autoScroll = true, user}) {
   );
 }
 
-function HistoryPage({data}) {
+function HistoryPage({data, user}) {
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState('all');
   const rows = data.filter(r => (r.reference || '').toLowerCase().includes(query.toLowerCase()) && (status === 'all' || r.status === status));
@@ -1433,13 +1892,37 @@ function HistoryPage({data}) {
           </select>
           <button className="secondary" onClick={exportCsv}><Download size={16}/>Export CSV</button>
         </div>
-        <HistoryTable rows={rows}/>
+        <HistoryTable rows={rows} user={user}/>
       </section>
     </>
   );
 }
 
-function HistoryTable({rows}) {
+function HistoryReportButton({id, reference}) {
+  const [downloading, setDownloading] = useState(false);
+  const [error, setError] = useState(null);
+
+  if (!id) return <span>—</span>;
+  return (
+    <div style={{display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start'}}>
+      <button
+        type="button"
+        className="secondary small-button"
+        disabled={downloading}
+        onClick={() => downloadVerificationPdf(id, reference, setDownloading, setError)}
+        style={{padding: '3px 8px', fontSize: '11px', display: 'inline-flex', alignItems: 'center', gap: '4px'}}
+        title="Download PDF report"
+      >
+        <FileText size={13}/>
+        {downloading ? 'Downloading…' : 'Download PDF report'}
+      </button>
+      {error && <span style={{color: '#dc2626', fontSize: '10px', marginTop: '2px'}}>{error}</span>}
+    </div>
+  );
+}
+
+function HistoryTable({rows, user}) {
+  const isUser = isUserRole(user);
   return rows.length ? (
     <div className="table-scroll">
       <table>
@@ -1449,6 +1932,7 @@ function HistoryTable({rows}) {
             <th>Verification result</th>
             <th>Processing time</th>
             <th>Checked on</th>
+            {isUser && <th>Report</th>}
           </tr>
         </thead>
         <tbody>
@@ -1458,6 +1942,7 @@ function HistoryTable({rows}) {
               <td><Badge status={r.status}/></td>
               <td>{r.duration_ms != null ? (r.duration_ms / 1000).toFixed(2) + 's' : '—'}</td>
               <td>{fmtTime(r.created_at)}</td>
+              {isUser && <td><HistoryReportButton id={r.id} reference={r.reference}/></td>}
             </tr>
           ))}
         </tbody>
@@ -1489,14 +1974,47 @@ function Empty({icon: Icon = FileText, title, text}) {
 // ROLE 2: INSTITUTION ADMIN VIEWS
 // ==============================================================================
 
-function InstitutionDashboardView({user, dashboard, setPage}) {
+function InstitutionDashboardView({user, dashboard, setPage, onChange}) {
+  const [rows, setRows] = useState([]);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [revokeId, setRevokeId] = useState(null);
+  const [query, setQuery] = useState('');
+
+  async function load() {
+    try {
+      setRows(await api('/certificates'));
+    } catch(e) {
+      setError(e.message);
+    }
+  }
+
+  useEffect(() => { load(); }, []);
+
+  async function revoke() {
+    setBusy(true);
+    try {
+      await api('/certificates/' + encodeURIComponent(revokeId) + '/revoke', {method: 'POST'});
+      setRevokeId(null);
+      await load();
+      onChange?.();
+    } catch(e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const filtered = rows.filter(r => (r.reference || '').toLowerCase().includes(query.toLowerCase()));
+
   return (
     <>
       <div className="dashboard-hero">
         <div className="dashboard-hero-content">
           <div>
             <span className="eyebrow light">INSTITUTION WORKSPACE</span>
-            <h2>{user.name}</h2>
+            <h2>Institution Dashboard</h2>
+            <p style={{fontSize: '15px', color: '#FFFFFF', fontWeight: 600, margin: '2px 0 6px'}}>{user.name}</p>
             <p>
               Accredited institutional credential authority. Register official certificates, manage on-chain status, and review issuance outcomes.
             </p>
@@ -1533,40 +2051,81 @@ function InstitutionDashboardView({user, dashboard, setPage}) {
         ))}
       </div>
 
-      <section className="panel recent-panel">
+      <ErrorMessage message={error}/>
+      <section className="panel">
         <div className="panel-title">
-          <h3>Recently Registered Certificates</h3>
-          <button className="text-button" onClick={() => setPage('registry')}>
-            View full registry <ArrowUpRight size={15}/>
-          </button>
+          <h3>Issued Certificates</h3>
+          <span className="count-pill">{filtered.length} records</span>
+          <div className="search-field" style={{maxWidth: '260px', marginLeft: 'auto'}}>
+            <Search size={16}/>
+            <input placeholder="Search certificate ID" value={query} onChange={e => setQuery(e.target.value)}/>
+          </div>
         </div>
-        {dashboard?.recent_registrations?.length ? (
+        {filtered.length ? (
           <div className="table-scroll">
             <table>
               <thead>
                 <tr>
                   <th>Certificate ID</th>
-                  <th>Registered Date</th>
-                  <th>Issuer Name</th>
+                  <th>Status</th>
+                  <th>Issuer</th>
                   <th>Transaction Reference</th>
+                  <th>Action</th>
                 </tr>
               </thead>
               <tbody>
-                {dashboard.recent_registrations.map(r => (
-                  <tr key={r.id || r.reference}>
-                    <td><strong>{r.reference}</strong></td>
-                    <td>{fmtTime(r.created_at)}</td>
+                {filtered.map(r => (
+                  <tr key={r.reference}>
+                    <td>
+                      <strong>{r.reference}</strong>
+                    </td>
+                    <td>
+                      <Badge status={r.revoked ? 'revoked' : r.issuer_approved ? 'verified' : 'not_verified'}>
+                        {r.revoked ? 'Revoked' : r.issuer_approved ? 'Active' : 'Issuer disabled'}
+                      </Badge>
+                    </td>
                     <td>{r.issuer_name || user.name}</td>
-                    <td><span className="mono">{r.transaction_hash ? r.transaction_hash.slice(0, 16) + '…' : '—'}</span></td>
+                    <td>
+                      {r.explorer_url ? (
+                        <a href={r.explorer_url} target="_blank" rel="noreferrer" className="mono" style={{color: 'var(--green,#087d6a)', display: 'inline-flex', alignItems: 'center', gap: '3px'}}>
+                          {r.transaction_hash?.slice(0, 16)}… <ArrowUpRight size={12}/>
+                        </a>
+                      ) : (
+                        <span className="mono">{r.transaction_hash ? r.transaction_hash.slice(0, 16) + '…' : '—'}</span>
+                      )}
+                    </td>
+                    <td>
+                      <button className="danger-text" disabled={busy || r.revoked} onClick={() => setRevokeId(r.reference)}>
+                        <Ban size={15}/>{r.revoked ? 'Revoked' : 'Revoke'}
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
         ) : (
-          <Empty icon={Layers3} title="No credentials registered yet" text="Use the Register Certificates portal to issue your first batch of certificates on the blockchain."/>
+          <Empty title="Your registry starts here" text="Register an original certificate to create a trusted on-chain record."/>
         )}
       </section>
+
+      {revokeId && (
+        <div className="modal-backdrop">
+          <section className="modal" role="dialog" aria-modal="true" aria-labelledby="revoke-title">
+            <div className="square-icon warning"><Ban size={25}/></div>
+            <h2 id="revoke-title">Revoke {revokeId}?</h2>
+            <p>
+              This permanently marks the blockchain record as revoked. Future verification checks will show Revoked. The action is recorded on the blockchain and audit logs.
+            </p>
+            <div className="modal-actions">
+              <button className="secondary" disabled={busy} onClick={() => setRevokeId(null)}>Cancel</button>
+              <button className="danger" disabled={busy} onClick={revoke}>
+                {busy ? <Spinner/> : 'Revoke Certificate'}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </>
   );
 }
@@ -1611,124 +2170,6 @@ function RegisterPage({user, onChange}) {
           </div>
         </aside>
       </div>
-    </>
-  );
-}
-
-function RegistryPage({user, onChange}) {
-  const [rows, setRows] = useState([]);
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [revokeId, setRevokeId] = useState(null);
-  const [query, setQuery] = useState('');
-
-  async function load() {
-    try {
-      setRows(await api('/certificates'));
-    } catch(e) {
-      setError(e.message);
-    }
-  }
-
-  useEffect(() => { load(); }, []);
-
-  async function revoke() {
-    setBusy(true);
-    try {
-      await api('/certificates/' + encodeURIComponent(revokeId) + '/revoke', {method: 'POST'});
-      setRevokeId(null);
-      await load();
-      onChange();
-    } catch(e) {
-      setError(e.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const filtered = rows.filter(r => (r.reference || '').toLowerCase().includes(query.toLowerCase()));
-
-  return (
-    <>
-      <PageHeading eyebrow="ISSUER WORKSPACE" title="Certificate Registry" text="Manage credentials issued by your institution. Revoke compromised or superseded credentials permanently."/>
-      <ErrorMessage message={error}/>
-      <div className="verify-layout" style={{marginBottom: '28px'}}>
-        <CertificateUpload mode="register" api={api} Badge={Badge} Result={Result} onChange={() => { load(); onChange?.(); }} user={user}/>
-      </div>
-      <section className="panel">
-        <div className="panel-title">
-          <h3>Issued Certificates</h3>
-          <span className="count-pill">{filtered.length} records</span>
-          <div className="search-field" style={{maxWidth: '260px', marginLeft: 'auto'}}>
-            <Search size={16}/>
-            <input placeholder="Search certificate ID" value={query} onChange={e => setQuery(e.target.value)}/>
-          </div>
-        </div>
-        {filtered.length ? (
-          <div className="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th>Certificate ID</th>
-                  <th>Status</th>
-                  <th>Issuer</th>
-                  <th>Transaction Reference</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map(r => (
-                  <tr key={r.reference}>
-                    <td>
-                      <strong>{r.reference}</strong>
-                    </td>
-                    <td>
-                      <Badge status={r.revoked ? 'revoked' : r.issuer_approved ? 'verified' : 'not_verified'}>
-                        {r.revoked ? 'Revoked' : r.issuer_approved ? 'Active' : 'Issuer disabled'}
-                      </Badge>
-                    </td>
-                    <td>{r.issuer_name}</td>
-                    <td>
-                      {r.explorer_url ? (
-                        <a href={r.explorer_url} target="_blank" rel="noreferrer" className="mono" style={{color: 'var(--green,#087d6a)', display: 'inline-flex', alignItems: 'center', gap: '3px'}}>
-                          {r.transaction_hash?.slice(0, 16)}… <ArrowUpRight size={12}/>
-                        </a>
-                      ) : (
-                        <span className="mono">{r.transaction_hash ? r.transaction_hash.slice(0, 16) + '…' : '—'}</span>
-                      )}
-                    </td>
-                    <td>
-                      <button className="danger-text" disabled={busy || r.revoked} onClick={() => setRevokeId(r.reference)}>
-                        <Ban size={15}/>{r.revoked ? 'Revoked' : 'Revoke'}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <Empty title="Your registry starts here" text="Register an original certificate to create a trusted on-chain record."/>
-        )}
-      </section>
-
-      {revokeId && (
-        <div className="modal-backdrop">
-          <section className="modal" role="dialog" aria-modal="true" aria-labelledby="revoke-title">
-            <div className="square-icon warning"><Ban size={25}/></div>
-            <h2 id="revoke-title">Revoke {revokeId}?</h2>
-            <p>
-              This permanently marks the blockchain record as revoked. Future verification checks will show Revoked. The action is recorded on the blockchain and audit logs.
-            </p>
-            <div className="modal-actions">
-              <button className="secondary" disabled={busy} onClick={() => setRevokeId(null)}>Cancel</button>
-              <button className="danger" disabled={busy} onClick={revoke}>
-                {busy ? <Spinner/> : 'Revoke Certificate'}
-              </button>
-            </div>
-          </section>
-        </div>
-      )}
     </>
   );
 }
@@ -2844,82 +3285,6 @@ function Architecture() {
   );
 }
 
-function EvidencePage() {
-  const [data, setData] = useState(null);
-  const [error, setError] = useState('');
-  useEffect(() => {
-    api('/evaluation').then(setData).catch(e => setError(e.message));
-  }, []);
-  const m = data?.model;
-  const s = data?.system;
-  return (
-    <>
-      <PageHeading eyebrow="MEASURE, THEN CLAIM" title="Evaluation & evidence" text="Measured prototype results, with dataset scope and limitations kept visible."/>
-      <ErrorMessage message={error}/>
-      <div className="evidence-grid">
-        <section className="panel">
-          <div className="panel-title">
-            <BrainCircuit size={21}/>
-            <h3>Experimental AI model</h3>
-            <Badge status="inconclusive">Synthetic data</Badge>
-          </div>
-          {m ? (
-            <>
-              <div className="metric-grid">
-                {[['Precision', m.precision], ['Recall', m.recall], ['F1 score', m.f1]].map(([l, v]) => (
-                  <div key={l}>
-                    <strong>{(v * 100).toFixed(1)}<small>%</small></strong>
-                    <span>{l}</span>
-                  </div>
-                ))}
-              </div>
-              <p className="panel-copy">{m.train_samples} training examples · {m.test_samples} held-out examples · Template groups separated between training and testing.</p>
-              <div className="confusion">
-                <h4>Confusion matrix</h4>
-                <small>Rows: actual normal / anomaly. Columns: predicted normal / anomaly.</small>
-                <div>{m.confusion_matrix.flat().map((n, i) => <span key={i}>{n}</span>)}</div>
-              </div>
-              <p className="warning-copy">{m.limitations}</p>
-            </>
-          ) : (
-            <Empty icon={BrainCircuit} title="No model evaluation yet" text="Train and evaluate the advisory model before making performance claims."/>
-          )}
-        </section>
-
-        <section className="panel">
-          <div className="panel-title">
-            <Activity size={21}/>
-            <h3>System verification</h3>
-          </div>
-          {s ? (
-            <>
-              <div className="metric-grid">
-                <div><strong>{s.passed}/{s.total}</strong><span>Expected outcomes</span></div>
-                <div><strong>{(s.mean_ms / 1000).toFixed(2)}<small>s</small></strong><span>Mean verification</span></div>
-                <div><strong>{(s.p95_ms / 1000).toFixed(2)}<small>s</small></strong><span>95th percentile</span></div>
-              </div>
-              <div className="scenario-list">
-                {s.cases.map(c => (
-                  <div key={c.name}>
-                    {c.passed ? <CheckCircle2 size={17}/> : <X size={17}/>}
-                    <span>{c.name}</span>
-                    <Badge status={c.actual}/>
-                  </div>
-                ))}
-              </div>
-              <p className="panel-copy">{s.scope}</p>
-              <p className="panel-copy">OCR field accuracy: {s.ocr?.field_accuracy != null ? (s.ocr.field_accuracy * 100).toFixed(0) + '% on ' + s.ocr.field_count + ' fields in one generated scan' : 'Not measured'}.</p>
-              <p className="warning-copy">Local-chain transaction fees are development measurements, not estimates of public-network prices. This small demonstration is not a scalability study.</p>
-            </>
-          ) : (
-            <Empty icon={Activity} title="Evaluation has not run yet" text="Run the end-to-end evaluation script against the local application."/>
-          )}
-        </section>
-      </div>
-    </>
-  );
-}
-
 function AuditPage() {
   const [rows, setRows] = useState([]);
   const [error, setError] = useState('');
@@ -2983,7 +3348,7 @@ export default function App() {
   function getDefaultPage(role) {
     const c = getCanonicalRole(role);
     if (c === ROLE_SYSTEM_ADMIN) return 'dashboard';
-    if (c === ROLE_INSTITUTION_ADMIN) return 'registry';
+    if (c === ROLE_INSTITUTION_ADMIN) return 'dashboard';
     return 'verify';
   }
 
@@ -2996,26 +3361,22 @@ export default function App() {
         ['admin_issuer_history', 'Issuer History', Layers3],
         ['admin_verifications', 'User History', Search],
         ['admin_audit', 'System Audit Trail', ShieldCheck],
-        ['architecture', 'System Architecture', Workflow],
-        ['evidence', 'Evaluation & Evidence', ChartNoAxesCombined]
+        ['architecture', 'System Architecture', Workflow]
       ];
     }
     if (c === ROLE_INSTITUTION_ADMIN) {
       return [
-        ['registry', 'Certificate Registry', Layers3],
         ['dashboard', 'Institution Dashboard', Building2],
         ['register', 'Register Credentials', UploadCloud],
         ['audit', 'Activity Log', Activity],
-        ['architecture', 'System Architecture', Workflow],
-        ['evidence', 'Evaluation & Evidence', ChartNoAxesCombined]
+        ['architecture', 'System Architecture', Workflow]
       ];
     }
     // ROLE_USER
     return [
       ['verify', 'Verify Certificate', ScanLine],
       ['history', 'Verification History', History],
-      ['architecture', 'System Architecture', Workflow],
-      ['evidence', 'Evaluation & Evidence', ChartNoAxesCombined]
+      ['architecture', 'System Architecture', Workflow]
     ];
   }
 
@@ -3036,6 +3397,9 @@ export default function App() {
       const hash = window.location.hash.replace('#', '');
       if (hash && getNav(user.role).some(n => n[0] === hash)) {
         setPage(hash);
+      } else {
+        const def = getDefaultPage(user.role);
+        setPage(def);
       }
     }
     window.addEventListener('hashchange', onHashChange);
@@ -3229,26 +3593,22 @@ export default function App() {
                     View all activity <ArrowUpRight size={15}/>
                   </button>
                 </div>
-                <HistoryTable rows={dashboard?.recent || []}/>
+                <HistoryTable rows={dashboard?.recent || []} user={user}/>
               </section>
             </>
           )}
 
           {canonicalRole === ROLE_USER && page === 'history' && (
-            <HistoryPage data={history}/>
+            <HistoryPage data={history} user={user}/>
           )}
 
           {/* ================= INSTITUTION ADMIN ROUTES ================= */}
           {canonicalRole === ROLE_INSTITUTION_ADMIN && page === 'dashboard' && (
-            <InstitutionDashboardView user={user} dashboard={dashboard} setPage={navigateTo}/>
+            <InstitutionDashboardView user={user} dashboard={dashboard} setPage={navigateTo} onChange={refresh}/>
           )}
 
           {canonicalRole === ROLE_INSTITUTION_ADMIN && page === 'register' && (
             <RegisterPage user={user} onChange={refresh}/>
-          )}
-
-          {canonicalRole === ROLE_INSTITUTION_ADMIN && page === 'registry' && (
-            <RegistryPage user={user} onChange={refresh}/>
           )}
 
           {canonicalRole === ROLE_INSTITUTION_ADMIN && page === 'audit' && (
@@ -3281,7 +3641,6 @@ export default function App() {
           )}
 
           {/* ================= SHARED REFERENCE ROUTES ================= */}
-          {page === 'evidence' && <EvidencePage/>}
           {page === 'architecture' && <Architecture/>}
 
           <footer className="workspace-footer">

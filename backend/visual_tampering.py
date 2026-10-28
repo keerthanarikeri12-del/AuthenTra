@@ -155,10 +155,13 @@ def _merge_boxes(boxes: List[Dict[str, Any]], iou_thresh: float = 0.2) -> List[D
                 cur_conf = max(cur_conf, b2["confidence"])
                 used.add(j)
 
+        box_coords = [round(cur_x1, 4), round(cur_y1, 4), round(cur_x2 - cur_x1, 4), round(cur_y2 - cur_y1, 4)]
         merged.append({
-            "box": [round(cur_x1, 4), round(cur_y1, 4), round(cur_x2 - cur_x1, 4), round(cur_y2 - cur_y1, 4)],
+            "box": box_coords,
+            "bbox": box_coords,
             "raw_score": cur_score,
             "confidence": cur_conf,
+            "score": cur_conf,
             "type": "model_anomaly",
             "label": "Suspected local compression anomaly",
             "explanation": f"Localized compression level anomaly spanning coordinates [{round(cur_x1, 3)}, {round(cur_y1, 3)}, {round(cur_x2 - cur_x1, 3)}, {round(cur_y2 - cur_y1, 3)}]."
@@ -278,16 +281,22 @@ def analyze_visual_tampering(data: bytes, kind: str, reference_image_data: Optio
         acc_text = " ".join(parts)
         status = "suspicious_regions_detected"
 
+    max_score = max([r.get("confidence", 0.0) for r in all_regions], default=0.0) if all_regions else 0.0
     return {
         "status": status,
         "page": page_number,
+        "analyzed_page": page_number,
         "regions": all_regions,
+        "suspicious_regions": all_regions,
+        "model_provenance": provenance.get("technique") or "Error Level Analysis",
+        "anomaly_score": round(max_score, 2),
         "summary": {
             "total_regions": len(all_regions),
             "model_anomalies": sum(1 for r in all_regions if r["type"] == "model_anomaly"),
             "reference_differences": sum(1 for r in all_regions if r["type"] == "reference_difference"),
             "global_ela_mean": round(ela_mean, 2),
             "reference_diff_mean": round(ref_diff_mean, 2) if ref_diff_mean is not None else None,
+            "anomaly_score": round(max_score, 2),
         },
         "accessible_description": acc_text,
         "provenance": provenance,

@@ -212,6 +212,10 @@ def initialize():
             "visual_tampering": "TEXT",
             "transformation_analysis": "TEXT",
             "review_routing": "TEXT",
+            "report_json": "TEXT",
+            "file_name": "TEXT",
+            "file_size": "INTEGER",
+            "verified_at": "TEXT",
         }.items():
             if name not in ver_columns:
                 conn.execute(f"ALTER TABLE verifications ADD COLUMN {name} {definition}")

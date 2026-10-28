@@ -26,8 +26,16 @@ test.describe('Two Separate Authentication Experiences', () => {
     // 5. Verify User role nav items
     await expect(page.getByRole('button', { name: 'Verify certificate' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Verification history' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'System Architecture' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Evaluation & Evidence' })).toHaveCount(0);
     // Verifier should NOT have Certificate registry or Institutions management
+    await expect(page.getByRole('button', { name: 'Certificate Registry' })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Institutions' })).toHaveCount(0);
+
+    // Playwright check: navigate to /#evidence as verifier and expect fallback to Certificate verification
+    await page.goto('/#evidence');
+    await expect(page.getByRole('heading', { name: 'Certificate verification' })).toBeVisible();
+    await expect(page.getByText('MEASURE, THEN CLAIM')).toHaveCount(0);
 
     // 6. Sign out
     await page.getByRole('button', { name: 'Sign out' }).click();
@@ -84,9 +92,42 @@ test.describe('Two Separate Authentication Experiences', () => {
     await page.getByLabel('Password', { exact: true }).fill('AuthenTra-demo-2026!');
     await page.getByRole('button', { name: 'Open workspace' }).click();
 
-    // Verify access to Issuer workspace (Certificate registry & upload)
-    await expect(page.getByRole('heading', { name: 'Certificate registry' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Certificate registry' })).toBeVisible();
-    await expect(page.getByText('Issued certificates')).toBeVisible();
+    // Verify access to Issuer workspace (Institution Dashboard & Issued certificates)
+    await expect(page.getByRole('heading', { name: 'Institution Dashboard' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Institution Dashboard' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Bulk Register Certificates' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Issued certificates' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Certificate Registry' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Evaluation & Evidence' })).toHaveCount(0);
+
+    // Playwright check: click "Bulk Register Certificates" and expect the "Register Certificates on Blockchain" heading
+    await page.getByRole('button', { name: 'Bulk Register Certificates' }).click();
+    await expect(page.getByRole('heading', { name: 'Register Certificates on Blockchain' })).toBeVisible();
+
+    // Playwright check: navigate to /#registry and /#evidence and expect to land on the Institution Dashboard
+    await page.goto('/#registry');
+    await expect(page.getByRole('heading', { name: 'Institution Dashboard' })).toBeVisible();
+
+    await page.goto('/#evidence');
+    await expect(page.getByRole('heading', { name: 'Institution Dashboard' })).toBeVisible();
+  });
+
+  test('System Admin Login Experience: Admin navigation and Evaluation & Evidence unreachable', async ({ page }) => {
+    await page.goto('/#admin');
+    await expect(page.getByRole('heading', { name: 'Administrator Portal' })).toBeVisible();
+    await page.getByLabel('Administrator email', { exact: true }).fill('owner@authentra.demo');
+    await page.getByLabel('Password', { exact: true }).fill('AuthenTra-demo-2026!');
+    await page.getByRole('button', { name: 'Sign in to Admin Console' }).click();
+
+    // Verify System Admin navigation: Admin Overview and System Architecture visible, Evaluation & Evidence not present
+    await expect(page.getByRole('button', { name: 'Admin Overview' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'System Architecture' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Evaluation & Evidence' })).toHaveCount(0);
+
+    // Playwright check: navigate to /#evidence as owner and expect to land on Admin Overview
+    await page.goto('/#evidence');
+    await expect(page.getByRole('heading', { name: 'System Administration Console' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Admin Overview' })).toBeVisible();
+    await expect(page.getByText('MEASURE, THEN CLAIM')).toHaveCount(0);
   });
 });

@@ -380,7 +380,10 @@ def start_worker(verify, register):
                         # Verify mode
                         with connect() as conn:
                             conn.execute("UPDATE upload_items SET status='VALIDATING' WHERE id=?", (item['id'],))
-                        result = verify(data_bytes, kind, item['reference'], user)
+                        try:
+                            result = verify(data_bytes, kind, item['reference'], user, file_name=item.get('filename'), file_size=len(data_bytes))
+                        except TypeError:
+                            result = verify(data_bytes, kind, item['reference'], user)
                         state = 'succeeded'
                         status = result.get('category') or result.get('status', 'VERIFIED').upper()
                 except UncertainTransactionError as exc:

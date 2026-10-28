@@ -8,6 +8,9 @@ async function login(page, institution = false) {
   await page.getByLabel(institution ? 'Official email address' : 'Email address', {exact:true}).fill(institution ? 'issuer@authentra.demo' : 'verifier@authentra.demo');
   await page.getByLabel('Password', {exact:true}).fill('AuthenTra-demo-2026!');
   await page.getByRole('button', {name:'Open workspace'}).click();
+  if (institution) {
+    await page.getByRole('button', {name: 'Register Credentials'}).click();
+  }
   await expect(page.getByRole('button', {name:'Browse Files'})).toBeVisible();
 }
 const originals = ['samples/original.pdf', 'samples/modified.pdf'].map(f => path.resolve(f));

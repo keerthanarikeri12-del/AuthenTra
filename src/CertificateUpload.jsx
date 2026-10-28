@@ -1,6 +1,9 @@
 import React, {useEffect, useRef, useState} from 'react';
 import {UploadCloud, FileText, X, LoaderCircle, Download, ShieldCheck, AlertTriangle, RefreshCw, ArrowUpRight, CheckCircle2} from 'lucide-react';
 import {FILE_TYPES, formatBytes, inspectFile, referenceError, selectionError, sendBatch} from './uploadValidation';
+import {downloadBatchVerificationPdf, isUserRole} from './reportUtils';
+
+const previewCache = new Map();
 
 const stageLabels = {
   QUEUED: 'Queued',
@@ -101,6 +104,8 @@ export default function CertificateUpload({mode = 'verify', api, Badge, Result, 
   const [checking, setChecking] = useState(false), [sending, setSending] = useState(false), [progress, setProgress] = useState(0);
   const [drag, setDrag] = useState(false), [batch, setBatch] = useState(null), [recent, setRecent] = useState([]), [pollError, setPollError] = useState('');
   const [reviewing, setReviewing] = useState(false);
+  const [downloadingBatch, setDownloadingBatch] = useState(false);
+  const [batchDownloadError, setBatchDownloadError] = useState(null);
   const [previewSample, setPreviewSample] = useState(null);
   const input = useRef(), mounted = useRef(true), sendingRef = useRef(false), checkRef = useRef(false), request = useRef(), changed = useRef(onChange);
   changed.current = onChange;
@@ -130,7 +135,22 @@ export default function CertificateUpload({mode = 'verify', api, Badge, Result, 
       try {
         const next = await api('/uploads/' + batch.id);
         if (cancelled) return;
-        setBatch(next); setPollError('');
+        setBatch(old => {
+          const prevMap = new Map();
+          (old?.items || []).forEach(it => {
+            if (it.preview) prevMap.set(it.id || it.filename, it.preview);
+          });
+          return {
+            ...next,
+            items: (next.items || []).map((it, idx) => {
+              const p = it.preview || prevMap.get(it.id || it.filename) || old?.items?.[idx]?.preview || previewCache.get(it.filename) || (it.result?.file_hash ? previewCache.get(it.result.file_hash) : null);
+              if (p && it.filename) previewCache.set(it.filename, p);
+              if (p && it.result?.file_hash) previewCache.set(it.result.file_hash, p);
+              return { ...it, preview: p };
+            })
+          };
+        });
+        setPollError('');
         if (next.state === 'completed') {changed.current?.(); return;}
       } catch (e) {if (cancelled) return; setPollError(e.message + ' Status will retry automatically.');}
       timer = setTimeout(poll, 1200);
@@ -170,7 +190,13 @@ export default function CertificateUpload({mode = 'verify', api, Badge, Result, 
     for (const item of added) {
       if (!mounted.current) break;
       let update;
-      try {update = await inspectFile(item.file, limits);} catch (e) {update = {error: e.message};}
+      try {
+        update = await inspectFile(item.file, limits);
+        if (update?.preview) {
+          previewCache.set(item.file.name, update.preview);
+          if (update.hash) previewCache.set(update.hash, update.preview);
+        }
+      } catch (e) {update = {error: e.message};}
       if (mounted.current) setItems(old => old.map(v => v.id === item.id ? {...v, ...update, checking: false} : v));
     }
     checkRef.current = false;
@@ -188,12 +214,16 @@ export default function CertificateUpload({mode = 'verify', api, Badge, Result, 
     try {
       const result = await sendBatch(form, setProgress, request.current.signal);
       if (!mounted.current) return;
-              // Preserve preview images from the original rows for post‑verification display
+        // Preserve preview images from the original rows for post‑verification display
         if (Array.isArray(result.items) && rows.length) {
-          result.items = result.items.map((it, i) => ({
-            ...it,
-            preview: rows[i]?.preview || it.preview,
-          }));
+          result.items = result.items.map((it, i) => {
+            const p = rows[i]?.preview || it.preview || previewCache.get(it.filename) || (it.result?.file_hash ? previewCache.get(it.result.file_hash) : null);
+            if (p && it.filename) previewCache.set(it.filename, p);
+            return {
+              ...it,
+              preview: p,
+            };
+          });
         }
         setBatch(result);
         setItems([]);
@@ -381,15 +411,35 @@ export default function CertificateUpload({mode = 'verify', api, Badge, Result, 
           <h3>{batch.state === 'completed' ? 'Batch complete' : 'Processing your batch'}</h3>
           <small>Batch {batch.id.slice(0, 12)}</small>
         </div>
-        <div style={{display: 'flex', gap: '8px', alignItems: 'center'}}>
+        <div style={{display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap'}}>
           {batch.state === 'completed' && (
-            <button type="button" className="secondary" onClick={() => { setBatch(null); setItems([]); setError(''); }}>
+            <button type="button" className="secondary" onClick={() => { setBatch(null); setItems([]); setError(''); setBatchDownloadError(null); }}>
               {issuing ? 'Register another batch' : 'Verify another batch'}
             </button>
           )}
+          {!issuing && isUserRole(user) && (() => {
+            const batchVerificationIds = (batch.items || [])
+              .map(i => i.result?.id)
+              .filter(Boolean);
+            if (batchVerificationIds.length > 1) {
+              return (
+                <button
+                  type="button"
+                  className="primary small-button"
+                  disabled={downloadingBatch}
+                  onClick={() => downloadBatchVerificationPdf(batchVerificationIds, setDownloadingBatch, setBatchDownloadError)}
+                  title="Download consolidated PDF verification report for this batch"
+                >
+                  <FileText size={16}/>{downloadingBatch ? 'Downloading…' : 'Download batch report'}
+                </button>
+              );
+            }
+            return null;
+          })()}
           <a className="secondary" href={'/api/uploads/' + batch.id + '/report'} download><Download size={16}/>CSV report</a>
         </div>
       </div>
+      {batchDownloadError && <div className="error" role="alert" style={{margin: '8px 0'}}>{batchDownloadError}</div>}
       {pollError && <div className="error" role="alert">{pollError}</div>}
       {issuing && batch.summary && (
         <div className="upload-summary" aria-live="polite">
@@ -534,7 +584,15 @@ export default function CertificateUpload({mode = 'verify', api, Badge, Result, 
               </button>
             </div>
           )}
-          {!issuing && item.result && <Result result={item.result} autoScroll={false} user={user}/>}
+          {!issuing && item.result && (
+            <Result
+              result={item.result}
+              autoScroll={false}
+              user={user}
+              preview={item.preview || previewCache.get(item.filename) || (item.result?.file_hash ? previewCache.get(item.result.file_hash) : null)}
+              file={item.file}
+            />
+          )}
           {['pending','processing'].includes(item.state) && (
             <p className="upload-footnote">
               {item.status === 'OCR_PROCESSING' ? 'Processing OCR and analyzing document contents…' :
