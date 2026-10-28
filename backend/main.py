@@ -19,6 +19,10 @@ from starlette.concurrency import run_in_threadpool
 from .core import CATEGORY_ACTIONS, CATEGORY_MAP, decide, normalize_reference, reference_hash
 from .documents import MAX_BYTES, analyze, model_ready
 from .registry import Registry, UncertainTransactionError
+from .fields import FIELD_SCHEMA_VERSION, compute_metadata_commitment, canonical_metadata_dict, compare_fields
+from .visual_tampering import analyze_visual_tampering
+from .transformations import analyze_transformations
+from .routing import determine_review_routing, record_review_decision, get_review_history
 from . import uploads, domains, email_verification, auth_oauth
 from .storage import ROOT, audit, connect, initialize, password_hash, password_matches, seed_demo, ROLE_USER, ROLE_INSTITUTION_ADMIN, ROLE_SYSTEM_ADMIN, canonical_role
 
@@ -790,14 +794,50 @@ def process_verification(data, kind, supplied_reference, user):
         if reg_dict["file_hash"].lower() != record["file_hash"].lower():
             analysis["warnings"].append("Database file hash differs from trusted on-chain record. Immutable blockchain record takes precedence.")
 
+    # 1. Field-level change detection against authenticated reference
+    field_comparison = compare_fields(
+        reg_dict if reg_dict else None,
+        analysis.get("fields", {}),
+        extraction_method=analysis.get("extraction_method"),
+        ocr_confidence=analysis.get("ocr_confidence")
+    )
+
+    # 2. Visual tampering localization
+    visual_analysis = analyze_visual_tampering(data, kind)
+
+    # 3. Rescan & compression transformation advisory
+    transformation_advisory = analyze_transformations(
+        data,
+        kind,
+        field_comparison=field_comparison,
+        visual_analysis=visual_analysis,
+        ocr_confidence=analysis.get("ocr_confidence"),
+        is_hash_match=bool(hash_matches)
+    )
+
+    # 4. Confidence-based review routing
+    review_routing = determine_review_routing(
+        verification_status,
+        field_comparison,
+        visual_analysis,
+        transformation_advisory,
+        analysis.get("ocr_confidence"),
+        " ".join(str(v) for v in analysis.get("fields", {}).values() if v),
+        analysis.get("fields", {})
+    )
+
     next_action = CATEGORY_ACTIONS.get(category, "Review the result details and consult the issuing institution.")
 
     with connect() as conn:
         cursor = conn.execute(
-            "INSERT INTO verifications(user_id,reference,status,category,file_hash,registered_hash,issuer,checks,message,duration_ms,ai_status) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO verifications("
+            "user_id,reference,status,category,file_hash,registered_hash,issuer,checks,message,duration_ms,ai_status,"
+            "field_analysis,visual_tampering,transformation_analysis,review_routing) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (user["id"], reference, status, category, digest, record["file_hash"] if record else None,
-             record["issuer"] if record else None, json.dumps(checks), message, elapsed, analysis["ai"]["status"])
+             record["issuer"] if record else None, json.dumps(checks), message, elapsed, analysis["ai"]["status"],
+             json.dumps(field_comparison), json.dumps(visual_analysis), json.dumps(transformation_advisory),
+             json.dumps(review_routing))
         )
         check_id = cursor.lastrowid
 
@@ -839,6 +879,10 @@ def process_verification(data, kind, supplied_reference, user):
         "verified_at": verified_at,
         "checks": checks,
         "duration_ms": elapsed,
+        "field_analysis": field_comparison,
+        "visual_tampering": visual_analysis,
+        "transformation_analysis": transformation_advisory,
+        "review_routing": review_routing,
         **analysis,
     }
 
@@ -898,6 +942,10 @@ async def verify(user: User, file: UploadFile = File(...), reference: str = Form
             "explorer_url": None,
             "ocr_confidence": None,
             "extraction_method": None,
+            "field_analysis": {"status": "unavailable", "explanation": "File is invalid or corrupted. Field comparison unavailable."},
+            "visual_tampering": {"status": "unavailable", "accessible_description": "Visual tampering analysis unavailable on invalid file."},
+            "transformation_analysis": {"status": "INSUFFICIENT_EVIDENCE", "advisory_outcome": "INSUFFICIENT_EVIDENCE", "headline": "Invalid File", "explanation": exc.detail},
+            "review_routing": {"routing_outcome": "ANALYSIS_UNAVAILABLE", "headline": "Analysis Unavailable", "requires_human_review": False},
             "verified_at": now_iso,
             "duration_ms": 0.0,
         }
@@ -949,16 +997,28 @@ def _register_document(data, kind, reference, user, metadata_override=None):
         raise HTTPException(503, f"The blockchain is unavailable: {exc}") from exc
 
     network_info = chain.get_network_info()
-    metadata_json = json.dumps({
-        "recipient_name": fields.get("name") or fields.get("recipient_name"),
-        "institution_name": fields.get("institution") or fields.get("institution_name") or user["name"],
-        "course": fields.get("course") or fields.get("qualification"),
-        "issue_date": fields.get("issue_date"),
-        "ocr_confidence": ocr_confidence,
-        "extraction_method": extraction_method,
-        "missing_fields": fields.get("missing_fields", []),
-        "ambiguous_fields": fields.get("ambiguous_fields", []),
-    })
+    canonical_meta = canonical_metadata_dict(fields)
+    if not canonical_meta.get("institution_name"):
+        canonical_meta["institution_name"] = fields.get("institution") or fields.get("institution_name") or user["name"]
+    canonical_meta["extraction_method"] = extraction_method
+    canonical_meta["ocr_confidence"] = ocr_confidence
+
+    metadata_commitment = compute_metadata_commitment(canonical_meta, reference, digest)
+    committed_at = datetime.now(timezone.utc).isoformat()
+
+    issuer_sig = None
+    if chain and hasattr(chain, "keys") and user.get("wallet") and user["wallet"] in chain.keys:
+        try:
+            from eth_account.messages import encode_defunct
+            from eth_account import Account
+            msg = encode_defunct(hexstr=metadata_commitment)
+            issuer_sig = Account.sign_message(msg, chain.keys[user["wallet"]]).signature.hex()
+        except Exception:
+            issuer_sig = f"0xcommitment-{metadata_commitment[:32]}"
+    else:
+        issuer_sig = f"0xcommitment-{metadata_commitment[:32]}"
+
+    metadata_json = json.dumps(canonical_meta)
 
     # Idempotent checks in local database
     with connect() as conn:
@@ -1011,10 +1071,18 @@ def _register_document(data, kind, reference, user, metadata_override=None):
                 conn.execute("""
                     INSERT INTO registrations(
                         reference, issuer_id, file_hash, transaction_hash, gas_used, fee_wei,
-                        network, contract_address, block_number, registered_at, status, metadata
-                    ) VALUES(?, ?, ?, '0xidempotent', 0, '0', ?, ?, NULL, ?, 'REGISTERED_ON_BLOCKCHAIN', ?)
-                    ON CONFLICT(reference) DO UPDATE SET status='REGISTERED_ON_BLOCKCHAIN'
-                """, (reference, user["id"], digest, str(network_info["chain_id"]), chain.contract.address, str(on_chain["registered_at"]), metadata_json))
+                        network, contract_address, block_number, registered_at, status, metadata,
+                        metadata_schema_version, confirmed_metadata, metadata_commitment, issuer_signature, committed_at
+                    ) VALUES(?, ?, ?, '0xidempotent', 0, '0', ?, ?, NULL, ?, 'REGISTERED_ON_BLOCKCHAIN', ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(reference) DO UPDATE SET
+                        status='REGISTERED_ON_BLOCKCHAIN',
+                        metadata_schema_version=excluded.metadata_schema_version,
+                        confirmed_metadata=excluded.confirmed_metadata,
+                        metadata_commitment=excluded.metadata_commitment,
+                        issuer_signature=excluded.issuer_signature,
+                        committed_at=excluded.committed_at
+                """, (reference, user["id"], digest, str(network_info["chain_id"]), chain.contract.address, str(on_chain["registered_at"]), metadata_json,
+                      FIELD_SCHEMA_VERSION, metadata_json, metadata_commitment, issuer_sig, committed_at))
                 audit(conn, user["id"], "register_idempotent", reference, None)
             return {
                 "reference": reference,
@@ -1027,6 +1095,10 @@ def _register_document(data, kind, reference, user, metadata_override=None):
                 "registered_at": on_chain["registered_at"],
                 "fields": fields,
                 "ocr_confidence": ocr_confidence,
+                "metadata_schema_version": FIELD_SCHEMA_VERSION,
+                "metadata_commitment": metadata_commitment,
+                "issuer_signature": issuer_sig,
+                "confirmed_metadata": canonical_meta,
                 "on_chain_verified": True,
                 "idempotent": True,
             }
@@ -1043,17 +1115,24 @@ def _register_document(data, kind, reference, user, metadata_override=None):
         conn.execute("""
             INSERT INTO registrations(
                 reference, issuer_id, file_hash, transaction_hash, gas_used, fee_wei,
-                network, contract_address, block_number, registered_at, status, metadata
-            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'REGISTERED_ON_BLOCKCHAIN', ?)
+                network, contract_address, block_number, registered_at, status, metadata,
+                metadata_schema_version, confirmed_metadata, metadata_commitment, issuer_signature, committed_at
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'REGISTERED_ON_BLOCKCHAIN', ?, ?, ?, ?, ?, ?)
             ON CONFLICT(reference) DO UPDATE SET
                 file_hash=excluded.file_hash,
                 transaction_hash=excluded.transaction_hash,
                 status='REGISTERED_ON_BLOCKCHAIN',
-                metadata=excluded.metadata
+                metadata=excluded.metadata,
+                metadata_schema_version=excluded.metadata_schema_version,
+                confirmed_metadata=excluded.confirmed_metadata,
+                metadata_commitment=excluded.metadata_commitment,
+                issuer_signature=excluded.issuer_signature,
+                committed_at=excluded.committed_at
         """, (
             reference, user["id"], digest, tx_hash or "0xconfirmed", transaction.get("gas_used"),
             transaction.get("fee_wei"), str(network_info["chain_id"]), transaction.get("contract_address") or chain.contract.address,
-            transaction.get("block_number"), str(transaction.get("registered_at")), metadata_json
+            transaction.get("block_number"), str(transaction.get("registered_at")), metadata_json,
+            FIELD_SCHEMA_VERSION, metadata_json, metadata_commitment, issuer_sig, committed_at
         ))
         audit(conn, user["id"], "register_confirmed", reference, tx_hash)
 
@@ -1074,6 +1153,10 @@ def _register_document(data, kind, reference, user, metadata_override=None):
         "explorer_url": explorer_url,
         "fields": fields,
         "ocr_confidence": ocr_confidence,
+        "metadata_schema_version": FIELD_SCHEMA_VERSION,
+        "metadata_commitment": metadata_commitment,
+        "issuer_signature": issuer_sig,
+        "confirmed_metadata": canonical_meta,
         "on_chain_verified": True,
     }
 
@@ -1200,6 +1283,7 @@ class ReviewAction(BaseModel):
     course: str | None = None
     institution: str | None = None
     issue_date: str | None = None
+    grade: str | None = None
 
 @app.post("/api/uploads/{job}/items/{item_id}/review")
 def review_upload_item(job: str, item_id: int, body: ReviewAction, user: User):
@@ -1256,6 +1340,83 @@ def revoke(reference: str, user: User, request: Request):
     with connect() as conn:
         audit(conn, user["id"], "revoke", reference, transaction["transaction_hash"], details=f"Certificate {reference} revoked by issuer {user.get('name')}", ip_address=ip)
     return {"status": "revoked", **transaction}
+
+class ConfirmMetadataRequest(BaseModel):
+    reference: str
+    recipient_name: str | None = None
+    course: str | None = None
+    institution_name: str | None = None
+    issue_date: str | None = None
+    grade: str | None = None
+
+@app.post("/api/certificates/confirm-metadata")
+def confirm_metadata(body: ConfirmMetadataRequest, user: User):
+    role(user, ROLE_INSTITUTION_ADMIN)
+    raw_dict = body.model_dump()
+    canonical = canonical_metadata_dict(raw_dict)
+    if not canonical.get("institution_name"):
+        canonical["institution_name"] = user["name"]
+    ref = body.reference.strip().upper()
+    try:
+        ref = normalize_reference(ref)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+    dummy_hash = "00" * 32
+    commitment = compute_metadata_commitment(canonical, ref, dummy_hash)
+    return {
+        "reference": ref,
+        "schema_version": FIELD_SCHEMA_VERSION,
+        "canonical_fields": canonical,
+        "commitment_preview": commitment,
+        "confirmed_by": user["email"],
+        "status": "READY_FOR_REGISTRATION",
+    }
+
+class ReviewDecisionRequest(BaseModel):
+    reference: str
+    decision: Literal["CONFIRM_VERIFIED", "FLAG_ALTERED", "REQUEST_REUPLOAD", "DISMISS"]
+    reason: str
+    item_id: int | None = None
+    evidence_snapshot: dict | None = None
+
+@app.post("/api/reviews/decision")
+def post_review_decision(body: ReviewDecisionRequest, user: User):
+    canon = canonical_role(user["role"])
+    if canon not in (ROLE_INSTITUTION_ADMIN, ROLE_SYSTEM_ADMIN):
+        raise HTTPException(403, "Only approved institution administrators and system administrators can submit review decisions.")
+    return record_review_decision(
+        reference=body.reference,
+        user=user,
+        decision=body.decision,
+        reason=body.reason,
+        item_id=body.item_id,
+        evidence_snapshot=body.evidence_snapshot,
+    )
+
+@app.get("/api/reviews/history/{reference}")
+def get_reviews_for_reference(reference: str, user: User):
+    canon = canonical_role(user["role"])
+    if canon not in (ROLE_INSTITUTION_ADMIN, ROLE_SYSTEM_ADMIN):
+        raise HTTPException(403, "Only authorized administrators can inspect reviewer decision logs.")
+    return get_review_history(reference, user)
+
+@app.delete("/api/storage/previews/{reference}")
+def delete_reference_preview(reference: str, user: User):
+    canon = canonical_role(user["role"])
+    if canon not in (ROLE_INSTITUTION_ADMIN, ROLE_SYSTEM_ADMIN):
+        raise HTTPException(403, "Not authorized to delete reference assets.")
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM reference_assets WHERE reference=?", (reference,)).fetchone()
+        if not row:
+            raise HTTPException(404, "Reference preview asset not found.")
+        if canon == ROLE_INSTITUTION_ADMIN and row["issuer_id"] != user["id"]:
+            raise HTTPException(403, "Institutions can only delete their own reference preview assets.")
+        preview_path = Path(row["preview_path"])
+        if preview_path.exists():
+            preview_path.unlink(missing_ok=True)
+        conn.execute("DELETE FROM reference_assets WHERE reference=?", (reference,))
+    return {"status": "deleted", "reference": reference}
 
 class Approval(BaseModel):
     approved: bool | None = None

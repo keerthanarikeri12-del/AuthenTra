@@ -2255,6 +2255,197 @@ td strong {
   line-height: 1.5;
 }
 
+/* Feature 1: Field-level change detection */
+.feature-section {
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid var(--line, #e5ebed);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.feature-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #f1f3f5;
+}
+
+.feature-title {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: #1f2937;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.field-comparison-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-top: 8px;
+}
+
+.field-comparison-table th {
+  background: #f8fafc;
+  color: #475569;
+  text-align: left;
+  padding: 8px 10px;
+  font-weight: 600;
+  border-bottom: 1px solid #e2e8f0;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.field-comparison-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid #f1f5f9;
+  vertical-align: top;
+}
+
+.field-tag {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.field-tag-matched { background: #dcfce7; color: #15803d; }
+.field-tag-changed { background: #fee2e2; color: #b91c1c; }
+.field-tag-missing { background: #f1f5f9; color: #64748b; }
+.field-tag-ambiguous { background: #fef3c7; color: #b45309; }
+.field-tag-unreadable { background: #f3f4f6; color: #4b5563; }
+.field-tag-unregistered { background: #f3e8ff; color: #7e22ce; }
+
+/* Feature 2: Visual tampering localization */
+.visual-overlay-container {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) 1fr;
+  gap: 16px;
+  align-items: start;
+  margin-top: 10px;
+}
+
+@media (max-width: 640px) {
+  .visual-overlay-container {
+    grid-template-columns: 1fr;
+  }
+}
+
+.visual-canvas-mock {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1.414 / 1;
+  background: #fdfefe;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+  overflow: hidden;
+}
+
+.visual-canvas-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.visual-bbox {
+  position: absolute;
+  border: 2px solid #ef4444;
+  background: rgba(239, 68, 68, 0.15);
+  border-radius: 2px;
+  transition: all 0.2s ease;
+}
+
+.visual-bbox.type-reference {
+  border-color: #3b82f6;
+  background: rgba(59, 130, 246, 0.15);
+}
+
+.region-card {
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+  margin-bottom: 6px;
+  font-size: 11px;
+}
+
+/* Feature 3: Transformations & Rescans */
+.transformation-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.trans-metric {
+  padding: 8px 10px;
+  background: #f8fafc;
+  border-radius: 6px;
+  border: 1px solid #e2e8f0;
+}
+
+.trans-metric small {
+  display: block;
+  font-size: 10px;
+  text-transform: uppercase;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.trans-metric strong {
+  display: block;
+  font-size: 13px;
+  color: #0f172a;
+  margin-top: 2px;
+}
+
+/* Feature 4: Review routing */
+.routing-banner {
+  padding: 10px 14px;
+  border-radius: 6px;
+  border-left: 4px solid #64748b;
+  background: #f8fafc;
+  margin-bottom: 12px;
+}
+
+.routing-banner.outcome-NO_REVIEW { border-left-color: #10b981; background: #ecfdf5; }
+.routing-banner.outcome-INSTITUTION_REVIEW { border-left-color: #f59e0b; background: #fffbeb; }
+.routing-banner.outcome-ADMIN_REVIEW { border-left-color: #ef4444; background: #fef2f2; }
+.routing-banner.outcome-BETTER_QUALITY { border-left-color: #6366f1; background: #eef2ff; }
+
+.review-action-panel {
+  margin-top: 12px;
+  padding: 12px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+}
+
+.review-action-panel textarea {
+  width: 100%;
+  border: 1px solid #cbd5e1;
+  border-radius: 5px;
+  padding: 8px;
+  font-size: 12px;
+  margin-top: 6px;
+  resize: vertical;
+}
+
 .extracted {
   display: grid;
   grid-template-columns: repeat(4, 1fr);

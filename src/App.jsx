@@ -705,7 +705,7 @@ function Login({onLogin, health, sessionMessage}) {
   );
 }
 
-function Verification({health, onChange}) {
+function Verification({health, onChange, user}) {
   return (
     <>
       <div className="section-heading">
@@ -717,7 +717,7 @@ function Verification({health, onChange}) {
         <div className="heading-mark"><Fingerprint size={65} strokeWidth={1}/></div>
       </div>
       <div className="verify-layout">
-        <CertificateUpload api={api} Badge={Badge} Result={Result} onChange={onChange} health={health} samples={sampleItems}/>
+        <CertificateUpload api={api} Badge={Badge} Result={Result} onChange={onChange} health={health} samples={sampleItems} user={user}/>
         <aside className="verification-aside">
           <section className="panel process-panel">
             <div className="panel-title">
@@ -760,7 +760,503 @@ function Verification({health, onChange}) {
   );
 }
 
-function Result({result: r, autoScroll = true}) {
+function FieldComparisonView({ fa }) {
+  if (!fa) return null;
+  if (fa.status === 'UNAVAILABLE') {
+    return (
+      <div className="feature-section" style={{marginTop: '14px', padding: '12px 14px', border: '1px solid #e2e8f0', borderRadius: '7px', background: '#f8fafc'}}>
+        <div style={{display: 'flex', alignItems: 'center', gap: '8px', color: '#64748b', marginBottom: '4px'}}>
+          <FileText size={16}/>
+          <span style={{fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px'}}>
+            Field-Level Comparison Unavailable
+          </span>
+        </div>
+        <p style={{fontSize: '12px', color: '#64748b', margin: 0}}>
+          {fa.message || 'Authenticated reference metadata is unavailable for this registration. Legacy records without confirmed issuer metadata cannot be compared at field level.'}
+        </p>
+      </div>
+    );
+  }
+
+  const fields = fa.fields || {};
+  const fieldKeys = ['reference', 'recipient_name', 'institution', 'course', 'issue_date', 'grade'];
+  const labelsMap = {
+    reference: 'Certificate Reference',
+    recipient_name: 'Recipient Name',
+    institution: 'Issuing Institution',
+    course: 'Course / Qualification',
+    issue_date: 'Issue Date',
+    grade: 'Grade / Result'
+  };
+
+  const hasAnyField = fieldKeys.some(k => fields[k]);
+  if (!hasAnyField) return null;
+
+  return (
+    <div className="feature-section" style={{marginTop: '14px', padding: '12px 14px', border: '1px solid #e2e8f0', borderRadius: '7px', background: '#fff'}}>
+      <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', marginBottom: '8px', gap: '8px'}}>
+        <div style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
+          <FileText size={16} color="var(--primary,#087d6a)"/>
+          <span style={{fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', color: '#1e293b'}}>
+            Field-Level Change Detection
+          </span>
+          <span className="reference-pill mono" style={{fontSize: '10px', background: '#f1f5f9', padding: '2px 6px', borderRadius: '4px'}}>
+            Schema v{fa.schema_version || '2026.1'}
+          </span>
+        </div>
+        <div style={{display: 'flex', alignItems: 'center', gap: '10px', fontSize: '11px'}}>
+          {fa.commitment_verified != null && (
+            <span style={{color: fa.commitment_verified ? '#15803d' : '#b91c1c', fontWeight: 600}}>
+              {fa.commitment_verified ? '● Issuer Commitment Verified' : '✕ Commitment Mismatch'}
+            </span>
+          )}
+          <span style={{color: fa.critical_field_changed ? '#b91c1c' : '#15803d', fontWeight: 600}}>
+            {fa.critical_field_changed ? '⚠ Critical Fields Changed' : '✓ Critical Fields Match'}
+          </span>
+        </div>
+      </div>
+
+      <div style={{overflowX: 'auto'}}>
+        <table className="field-comparison-table">
+          <thead>
+            <tr>
+              <th>Field</th>
+              <th>Registered (Confirmed)</th>
+              <th>Observed (Document)</th>
+              <th>Status</th>
+              <th>Comparison Detail</th>
+            </tr>
+          </thead>
+          <tbody>
+            {fieldKeys.map(k => {
+              const f = fields[k];
+              if (!f) return null;
+              const statusClass = 'field-tag field-tag-' + (f.status || 'missing').toLowerCase();
+              return (
+                <tr key={k}>
+                  <td style={{fontWeight: 600, color: '#334155'}}>{labelsMap[k] || k}</td>
+                  <td className="mono" style={{color: f.registered_value ? '#0f172a' : '#94a3b8'}}>{f.registered_value || '—'}</td>
+                  <td className="mono" style={{color: f.observed_value ? '#0f172a' : '#94a3b8'}}>{f.observed_value || '—'}</td>
+                  <td><span className={statusClass}>{f.status || 'unknown'}</span></td>
+                  <td style={{color: '#64748b', fontSize: '11px'}}>{f.explanation || '—'}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <p className="muted" style={{marginTop: '8px', fontSize: '10px', color: '#94a3b8', lineHeight: 1.4}}>
+        Deterministic comparison with conservative normalizers. Unreadable or missing fields represent extraction uncertainty, not confirmed alterations.
+      </p>
+    </div>
+  );
+}
+
+function VisualTamperingView({ vt }) {
+  if (!vt) return null;
+  if (vt.status === 'UNAVAILABLE') {
+    return (
+      <div className="feature-section" style={{marginTop: '14px', padding: '12px 14px', border: '1px solid #e2e8f0', borderRadius: '7px', background: '#f8fafc'}}>
+        <div style={{display: 'flex', alignItems: 'center', gap: '8px', color: '#64748b', marginBottom: '4px'}}>
+          <Layers3 size={16}/>
+          <span style={{fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px'}}>
+            Visual Tampering Localization Unavailable
+          </span>
+        </div>
+        <p style={{fontSize: '12px', color: '#64748b', margin: 0}}>
+          {vt.message || 'Visual tampering analysis is currently unavailable.'}
+        </p>
+      </div>
+    );
+  }
+
+  const regions = vt.suspicious_regions || [];
+  const hasRegions = regions.length > 0;
+
+  return (
+    <div className="feature-section" style={{marginTop: '14px', padding: '12px 14px', border: '1px solid #e2e8f0', borderRadius: '7px', background: '#fff'}}>
+      <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', marginBottom: '8px', gap: '8px'}}>
+        <div style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
+          <Layers3 size={16} color="var(--primary,#087d6a)"/>
+          <span style={{fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', color: '#1e293b'}}>
+            Visual Tampering Localization (Advisory)
+          </span>
+        </div>
+        <div style={{display: 'flex', alignItems: 'center', gap: '10px', fontSize: '11px', color: '#64748b'}}>
+          <span>Model / Method: <strong>{vt.model_provenance || vt.method || 'Error Level Analysis'}</strong></span>
+          {vt.anomaly_score != null && (
+            <span style={{fontWeight: 600, color: vt.anomaly_score > 0.4 ? '#b91c1c' : '#15803d'}}>
+              Max Anomaly: {Math.round(vt.anomaly_score * 100)}%
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="visual-overlay-container">
+        <div>
+          <div className="visual-canvas-mock" aria-label="Visual tampering preview canvas" role="img">
+            <div style={{padding: '12px', height: '100%', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', justifyContent: 'space-between'}}>
+              <div style={{height: '6px', width: '35%', background: '#e2e8f0', borderRadius: '3px'}}></div>
+              <div>
+                <div style={{height: '4px', width: '80%', background: '#f1f5f9', margin: '4px 0'}}></div>
+                <div style={{height: '4px', width: '60%', background: '#f1f5f9', margin: '4px 0'}}></div>
+                <div style={{height: '4px', width: '70%', background: '#f1f5f9', margin: '4px 0'}}></div>
+              </div>
+              <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                <div style={{height: '8px', width: '20%', background: '#e2e8f0', borderRadius: '2px'}}></div>
+                <div style={{height: '14px', width: '14px', borderRadius: '50%', border: '1px solid #cbd5e1'}}></div>
+              </div>
+            </div>
+            <div className="visual-canvas-overlay">
+              {regions.map((reg, idx) => {
+                const [x, y, w, h] = reg.bbox || [0, 0, 0, 0];
+                const isRef = reg.type === 'reference_difference';
+                return (
+                  <div
+                    key={idx}
+                    className={`visual-bbox ${isRef ? 'type-reference' : ''}`}
+                    style={{
+                      left: `${Math.max(0, Math.min(95, x * 100))}%`,
+                      top: `${Math.max(0, Math.min(95, y * 100))}%`,
+                      width: `${Math.max(4, Math.min(100, w * 100))}%`,
+                      height: `${Math.max(4, Math.min(100, h * 100))}%`
+                    }}
+                    title={`Region #${idx + 1}: ${reg.explanation || reg.type}`}
+                  />
+                );
+              })}
+            </div>
+          </div>
+          <small style={{display: 'block', textAlign: 'center', color: '#94a3b8', fontSize: '10px', marginTop: '4px'}}>
+            Rendered Preview Overlay (Page {vt.analyzed_page || 1})
+          </small>
+        </div>
+
+        <div>
+          {hasRegions ? (
+            <div>
+              <strong style={{fontSize: '11px', textTransform: 'uppercase', color: '#475569', display: 'block', marginBottom: '6px'}}>
+                Identified Suspicious Regions ({regions.length})
+              </strong>
+              {regions.map((reg, idx) => (
+                <div key={idx} className="region-card">
+                  <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px'}}>
+                    <strong style={{color: reg.type === 'reference_difference' ? '#2563eb' : '#dc2626'}}>
+                      Region #{idx + 1} ({reg.type === 'reference_difference' ? 'Reference Delta' : 'Model Discontinuity'})
+                    </strong>
+                    <span className="mono" style={{color: '#64748b', fontSize: '10px'}}>
+                      Score: {reg.score != null ? Math.round(reg.score * 100) + '%' : '—'}
+                    </span>
+                  </div>
+                  <p style={{margin: '2px 0', color: '#334155'}}>{reg.explanation}</p>
+                  <small className="mono" style={{color: '#94a3b8', fontSize: '9px'}}>
+                    BBox: [{(reg.bbox || []).map(v => typeof v === 'number' ? v.toFixed(3) : v).join(', ')}] · Page {reg.page || 1}
+                  </small>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{padding: '16px', background: '#f8fafc', borderRadius: '6px', textAlign: 'center', color: '#64748b'}}>
+              <CheckCircle2 size={24} color="#15803d" style={{margin: '0 auto 6px'}}/>
+              <strong style={{display: 'block', fontSize: '12px', color: '#1e293b'}}>No Localized Visual Discontinuities Detected</strong>
+              <p style={{fontSize: '11px', margin: '4px 0 0'}}>
+                Error level analysis and gradient checks found no localized patch manipulation anomalies exceeding threshold.
+              </p>
+            </div>
+          )}
+
+          {vt.accessible_description && (
+            <div style={{marginTop: '8px', padding: '8px 10px', background: '#f1f5f9', borderRadius: '5px'}}>
+              <small style={{display: 'block', fontWeight: 600, color: '#475569', fontSize: '10px', textTransform: 'uppercase'}}>
+                Accessible Description
+              </small>
+              <span style={{fontSize: '11px', color: '#334155', lineHeight: 1.4}}>
+                {vt.accessible_description}
+              </span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <p className="muted" style={{marginTop: '10px', fontSize: '10px', color: '#94a3b8', lineHeight: 1.4}}>
+        Preserves untouched original bytes for SHA-256 hash checks. Visual overlays are generated from separate rasterized working copies.
+      </p>
+    </div>
+  );
+}
+
+function TransformationAdvisoryView({ ta }) {
+  if (!ta) return null;
+  const outcomeLabels = {
+    FIELDS_AGREE_RESAVE_OR_REEXPORT: 'Fields Agree; Differences Consistent with Rescan or Re-Export',
+    CONTENT_DIFFERENCES_DETECTED: 'Content Differences Detected',
+    MIXED_EVIDENCE_REVIEW_REQUIRED: 'Mixed Evidence; Human Review Required',
+    INSUFFICIENT_EVIDENCE: 'Insufficient Evidence to Assess Transformation',
+    UNAVAILABLE: 'Transformation Analysis Unavailable'
+  };
+
+  const outcomeColors = {
+    FIELDS_AGREE_RESAVE_OR_REEXPORT: { border: '#059669', bg: '#ecfdf5', text: '#065f46' },
+    CONTENT_DIFFERENCES_DETECTED: { border: '#dc2626', bg: '#fef2f2', text: '#991b1b' },
+    MIXED_EVIDENCE_REVIEW_REQUIRED: { border: '#d97706', bg: '#fffbeb', text: '#92400e' },
+    INSUFFICIENT_EVIDENCE: { border: '#64748b', bg: '#f8fafc', text: '#334155' },
+    UNAVAILABLE: { border: '#94a3b8', bg: '#f8fafc', text: '#64748b' }
+  };
+
+  const cfg = outcomeColors[ta.outcome] || outcomeColors.INSUFFICIENT_EVIDENCE;
+
+  return (
+    <div className="feature-section" style={{marginTop: '14px', padding: '12px 14px', border: '1px solid #e2e8f0', borderRadius: '7px', background: '#fff'}}>
+      <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', marginBottom: '8px', gap: '8px'}}>
+        <div style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
+          <Activity size={16} color="var(--primary,#087d6a)"/>
+          <span style={{fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', color: '#1e293b'}}>
+            Rescan & Compression Advisory
+          </span>
+        </div>
+        <span className="reference-pill mono" style={{fontSize: '10px', background: '#f1f5f9', padding: '2px 6px', borderRadius: '4px'}}>
+          Advisory Only
+        </span>
+      </div>
+
+      <div style={{padding: '10px 14px', borderRadius: '6px', borderLeft: `4px solid ${cfg.border}`, background: cfg.bg, marginBottom: '10px'}}>
+        <strong style={{display: 'block', fontSize: '13px', color: cfg.text}}>
+          {outcomeLabels[ta.outcome] || ta.outcome}
+        </strong>
+        <p style={{fontSize: '12px', color: cfg.text, margin: '4px 0 0', lineHeight: 1.5}}>
+          {ta.explanation || 'Evaluated combined evidence from field comparisons, image blur/noise/blockiness, and document skew.'}
+        </p>
+      </div>
+
+      <div className="transformation-grid">
+        <div className="trans-metric">
+          <small>Laplacian Sharpness</small>
+          <strong>{ta.image_quality?.sharpness != null ? ta.image_quality.sharpness.toFixed(1) : '—'}</strong>
+        </div>
+        <div className="trans-metric">
+          <small>Noise Sigma</small>
+          <strong>{ta.image_quality?.noise_sigma != null ? ta.image_quality.noise_sigma.toFixed(2) : '—'}</strong>
+        </div>
+        <div className="trans-metric">
+          <small>8x8 Blockiness</small>
+          <strong>{ta.image_quality?.blockiness != null ? ta.image_quality.blockiness.toFixed(3) : '—'}</strong>
+        </div>
+        <div className="trans-metric">
+          <small>Estimated Skew</small>
+          <strong>{ta.skew_angle != null ? `${ta.skew_angle.toFixed(1)}°` : '0.0°'}</strong>
+        </div>
+        <div className="trans-metric">
+          <small>OCR Reliability</small>
+          <strong>{ta.ocr_reliability != null ? `${Math.round(ta.ocr_reliability)}%` : '—'}</strong>
+        </div>
+        <div className="trans-metric">
+          <small>Visual Anomaly</small>
+          <strong>{ta.visual_anomaly_score != null ? `${Math.round(ta.visual_anomaly_score * 100)}%` : '—'}</strong>
+        </div>
+      </div>
+
+      <div style={{marginTop: '10px', padding: '8px 10px', background: '#fffbeb', border: '1px solid #fef3c7', borderRadius: '5px'}}>
+        <span style={{fontSize: '11px', color: '#92400e', lineHeight: 1.4, display: 'block'}}>
+          <strong>Non-Negotiable Trust Rule:</strong> Advisory outcome only. High visual similarity or benign rescan characteristics must never promote an unverified, mismatched, or altered file to &ldquo;Verified&rdquo;.
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function ReviewRoutingView({ rr, reference, user }) {
+  if (!rr) return null;
+  const [history, setHistory] = useState([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [decision, setDecision] = useState('APPROVED');
+  const [reason, setReason] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [statusMsg, setStatusMsg] = useState(null);
+
+  const outcomeLabels = {
+    COMPLETED_NO_REVIEW: 'Analysis Completed Without Additional Review',
+    INSTITUTION_REVIEW_REQUIRED: 'Institution Review Required',
+    ADMIN_REVIEW_REQUIRED: 'Platform Administrator Review Required',
+    BETTER_QUALITY_REQUIRED: 'Better Quality Upload Required',
+    ANALYSIS_UNAVAILABLE: 'Review Routing Analysis Unavailable'
+  };
+
+  const outcomeBannerClasses = {
+    COMPLETED_NO_REVIEW: 'routing-banner outcome-NO_REVIEW',
+    INSTITUTION_REVIEW_REQUIRED: 'routing-banner outcome-INSTITUTION_REVIEW',
+    ADMIN_REVIEW_REQUIRED: 'routing-banner outcome-ADMIN_REVIEW',
+    BETTER_QUALITY_REQUIRED: 'routing-banner outcome-BETTER_QUALITY',
+    ANALYSIS_UNAVAILABLE: 'routing-banner'
+  };
+
+  const bannerClass = outcomeBannerClasses[rr.routing_outcome] || 'routing-banner';
+  const role = getCanonicalRole(user?.role);
+  const isReviewer = role === ROLE_INSTITUTION_ADMIN || role === ROLE_SYSTEM_ADMIN;
+
+  async function loadHistory() {
+    if (!reference) return;
+    setLoadingHistory(true);
+    try {
+      const res = await api(`/reviews/history/${reference}`);
+      setHistory(res.decisions || []);
+    } catch {
+      // ignore
+    } finally {
+      setLoadingHistory(false);
+    }
+  }
+
+  async function submitDecision() {
+    if (!reference || !decision) return;
+    setSubmitting(true);
+    setStatusMsg(null);
+    try {
+      await api('/reviews/decision', {
+        method: 'POST',
+        body: JSON.stringify({
+          certificate_reference: reference,
+          decision,
+          reason: reason.trim() || undefined,
+          model_version: rr.policy_version || '2026.1'
+        })
+      });
+      setStatusMsg({ type: 'success', text: `Review decision "${decision}" recorded successfully.` });
+      setReason('');
+      loadHistory();
+    } catch (e) {
+      setStatusMsg({ type: 'error', text: e.message || 'Failed to record decision.' });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="feature-section" style={{marginTop: '14px', padding: '12px 14px', border: '1px solid #e2e8f0', borderRadius: '7px', background: '#fff'}}>
+      <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', marginBottom: '8px', gap: '8px'}}>
+        <div style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
+          <Workflow size={16} color="var(--primary,#087d6a)"/>
+          <span style={{fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', color: '#1e293b'}}>
+            Confidence-Based Review Routing
+          </span>
+          <span className="reference-pill mono" style={{fontSize: '10px', background: '#f1f5f9', padding: '2px 6px', borderRadius: '4px'}}>
+            Policy v{rr.policy_version || '2026.1'}
+          </span>
+        </div>
+        <div style={{display: 'flex', alignItems: 'center', gap: '10px', fontSize: '11px', color: '#64748b'}}>
+          {rr.layout_familiarity != null && (
+            <span>Layout Familiarity: <strong>{Math.round(rr.layout_familiarity * 100)}%</strong></span>
+          )}
+          {rr.calibrated_confidence != null && (
+            <span>Calibrated Confidence: <strong>{Math.round(rr.calibrated_confidence * 100)}%</strong></span>
+          )}
+        </div>
+      </div>
+
+      <div className={bannerClass}>
+        <strong style={{display: 'block', fontSize: '13px'}}>
+          {outcomeLabels[rr.routing_outcome] || rr.routing_outcome}
+        </strong>
+        {rr.reasons && rr.reasons.length > 0 && (
+          <ul style={{margin: '6px 0 0', paddingLeft: '18px', fontSize: '12px', lineHeight: 1.5}}>
+            {rr.reasons.map((r, i) => <li key={i}>{r}</li>)}
+          </ul>
+        )}
+      </div>
+
+      {isReviewer && reference && (
+        <div className="review-action-panel">
+          <strong style={{fontSize: '12px', color: '#1e293b', display: 'block', marginBottom: '6px'}}>
+            Record Review Decision (Authorized Reviewer: {user.email || user.name || user.id})
+          </strong>
+          <div style={{display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '8px'}}>
+            {[
+              ['APPROVED', 'Approve (No Tampering)'],
+              ['REJECTED', 'Reject / Mark Altered'],
+              ['FLAGGED_FOR_AUDIT', 'Flag for Platform Audit']
+            ].map(([val, label]) => (
+              <label key={val} style={{fontSize: '12px', display: 'inline-flex', alignItems: 'center', gap: '4px', cursor: 'pointer'}}>
+                <input
+                  type="radio"
+                  name={`decision-${reference}`}
+                  value={val}
+                  checked={decision === val}
+                  onChange={() => setDecision(val)}
+                />
+                {label}
+              </label>
+            ))}
+          </div>
+          <label style={{fontSize: '11px', color: '#475569', display: 'block'}}>
+            Decision Justification & Notes:
+            <textarea
+              rows={2}
+              value={reason}
+              onChange={e => setReason(e.target.value)}
+              placeholder="Explain the review finding or evidence considered..."
+            />
+          </label>
+          <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px'}}>
+            <button
+              type="button"
+              className="primary small-button"
+              disabled={submitting}
+              onClick={submitDecision}
+            >
+              {submitting ? 'Recording…' : 'Submit Review Decision'}
+            </button>
+            {statusMsg && (
+              <span style={{fontSize: '11px', color: statusMsg.type === 'success' ? '#15803d' : '#b91c1c'}}>
+                {statusMsg.text}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {reference && (
+        <div style={{marginTop: '8px'}}>
+          <button
+            type="button"
+            className="ghost-button"
+            style={{fontSize: '11px', padding: '4px 0', color: 'var(--primary,#087d6a)', cursor: 'pointer'}}
+            onClick={() => {
+              if (!showHistory) loadHistory();
+              setShowHistory(!showHistory);
+            }}
+          >
+            {showHistory ? 'Hide Review Audit Trail' : 'View Review Audit Trail'}
+          </button>
+          {showHistory && (
+            <div style={{marginTop: '6px', borderTop: '1px solid #e2e8f0', paddingTop: '6px'}}>
+              {loadingHistory ? (
+                <small style={{color: '#64748b'}}>Loading review audit trail…</small>
+              ) : history.length === 0 ? (
+                <small style={{color: '#94a3b8'}}>No review decisions recorded yet for {reference}.</small>
+              ) : (
+                <div>
+                  {history.map((h, i) => (
+                    <div key={i} style={{fontSize: '11px', padding: '6px', background: '#f8fafc', borderRadius: '4px', marginBottom: '4px'}}>
+                      <div style={{display: 'flex', justifyContent: 'space-between', color: '#475569', fontWeight: 600}}>
+                        <span>{h.decision} (by {h.actor_user_id || h.actor_role})</span>
+                        <span className="mono">{fmtTime(h.recorded_at)}</span>
+                      </div>
+                      {h.reason && <p style={{margin: '2px 0 0', color: '#334155'}}>{h.reason}</p>}
+                      <small className="mono" style={{color: '#94a3b8', fontSize: '9px'}}>Evidence/Policy: {h.evidence_hash || h.model_version || '2026.1'}</small>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Result({result: r, autoScroll = true, user}) {
   const ref = useRef();
   useEffect(() => {
     if (autoScroll) ref.current?.scrollIntoView({behavior: 'smooth', block: 'nearest'});
@@ -850,6 +1346,11 @@ function Result({result: r, autoScroll = true}) {
           </div>
         ))}
       </div>
+
+      {r.field_analysis && <FieldComparisonView fa={r.field_analysis}/>}
+      {r.visual_tampering && <VisualTamperingView vt={r.visual_tampering}/>}
+      {r.transformation_analysis && <TransformationAdvisoryView ta={r.transformation_analysis}/>}
+      {r.review_routing && <ReviewRoutingView rr={r.review_routing} reference={r.reference} user={user}/>}
 
       <div className="extracted-metadata-section" style={{marginTop: '14px', padding: '12px 14px', border: '1px solid var(--line,#e5ebed)', borderRadius: '7px', background: '#fafbfc'}}>
         <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', marginBottom: '8px'}}>
@@ -1079,7 +1580,7 @@ function RegisterPage({user, onChange}) {
         text="Upload certificates in bulk (up to 100 files). Automated OCR extracts candidate IDs, while cryptographic SHA-256 hashes are committed to the smart contract."
       />
       <div className="verify-layout">
-        <CertificateUpload mode="register" api={api} Badge={Badge} Result={Result} onChange={onChange}/>
+        <CertificateUpload mode="register" api={api} Badge={Badge} Result={Result} onChange={onChange} user={user}/>
         <aside className="verification-aside">
           <section className="panel process-panel">
             <div className="panel-title">
@@ -1152,7 +1653,7 @@ function RegistryPage({user, onChange}) {
       <PageHeading eyebrow="ISSUER WORKSPACE" title="Certificate Registry" text="Manage credentials issued by your institution. Revoke compromised or superseded credentials permanently."/>
       <ErrorMessage message={error}/>
       <div className="verify-layout" style={{marginBottom: '28px'}}>
-        <CertificateUpload mode="register" api={api} Badge={Badge} Result={Result} onChange={() => { load(); onChange?.(); }}/>
+        <CertificateUpload mode="register" api={api} Badge={Badge} Result={Result} onChange={() => { load(); onChange?.(); }} user={user}/>
       </div>
       <section className="panel">
         <div className="panel-title">
@@ -2720,7 +3221,7 @@ export default function App() {
                   </div>
                 ))}
               </div>
-              <Verification health={health} onChange={refresh}/>
+              <Verification health={health} onChange={refresh} user={user}/>
               <section className="panel recent-panel">
                 <div className="panel-title">
                   <h3>Recent Verifications</h3>

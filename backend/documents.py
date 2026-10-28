@@ -34,6 +34,7 @@ def extract_fields(text):
         "course": r"(?:course|programme|program|qualification|degree)[ \t]*:[ \t]*([^\n\r]+)",
         "issue_date": r"(?:issue[ \t]*date|issued[ \t]*on|date)[ \t]*:[ \t]*(\d{4}-\d{2}-\d{2})",
         "identifier": r"(?:student[ \t]*id|student[ \t]*no|registration[ \t]*no|reg[ \t]*no|id[ \t]*no)[ \t]*:[ \t]*([A-Za-z0-9_-]{2,63})",
+        "grade": r"(?:grade|result|classification|gpa|marks|honours|honors|class)[ \t]*:[ \t]*([^\n\r]+)",
     }
     fields = {}
     missing_fields = []

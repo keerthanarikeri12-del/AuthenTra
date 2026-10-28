@@ -190,6 +190,11 @@ def initialize():
             "registered_at": "TEXT",
             "metadata": "TEXT",
             "requires_review": "INTEGER DEFAULT 0",
+            "metadata_schema_version": "TEXT DEFAULT '2026.1'",
+            "confirmed_metadata": "TEXT",
+            "metadata_commitment": "TEXT",
+            "issuer_signature": "TEXT",
+            "committed_at": "TEXT",
         }.items():
             if name not in reg_columns:
                 conn.execute(f"ALTER TABLE registrations ADD COLUMN {name} {definition}")
@@ -203,6 +208,10 @@ def initialize():
             "checks": "TEXT",
             "metadata": "TEXT",
             "message": "TEXT",
+            "field_analysis": "TEXT",
+            "visual_tampering": "TEXT",
+            "transformation_analysis": "TEXT",
+            "review_routing": "TEXT",
         }.items():
             if name not in ver_columns:
                 conn.execute(f"ALTER TABLE verifications ADD COLUMN {name} {definition}")
@@ -216,6 +225,37 @@ def initialize():
         }.items():
             if name not in audit_cols:
                 conn.execute(f"ALTER TABLE audit ADD COLUMN {name} {definition}")
+
+        # Review decisions table for audit trail of human review routing
+        conn.executescript('''
+        CREATE TABLE IF NOT EXISTS review_decisions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            reference TEXT NOT NULL,
+            item_id INTEGER,
+            actor_id INTEGER REFERENCES users(id),
+            actor_role TEXT NOT NULL,
+            actor_email TEXT NOT NULL,
+            decision TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            evidence_version TEXT,
+            model_versions TEXT,
+            policy_version TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS review_decisions_ref_idx ON review_decisions(reference);
+        CREATE INDEX IF NOT EXISTS review_decisions_actor_idx ON review_decisions(actor_id);
+
+        CREATE TABLE IF NOT EXISTS reference_assets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            reference TEXT UNIQUE NOT NULL,
+            issuer_id INTEGER REFERENCES users(id),
+            preview_path TEXT NOT NULL,
+            consent_to_retain INTEGER NOT NULL DEFAULT 1,
+            retention_until TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS reference_assets_ref_idx ON reference_assets(reference);
+        ''')
 
         conn.execute("CREATE INDEX IF NOT EXISTS verifications_user_idx ON verifications(user_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS verifications_status_idx ON verifications(status)")

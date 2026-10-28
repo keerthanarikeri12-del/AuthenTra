@@ -94,7 +94,7 @@ function getBadgeStatus(item, issuing) {
   return 'inconclusive';
 }
 
-export default function CertificateUpload({mode = 'verify', api, Badge, Result, onChange, health, samples = []}) {
+export default function CertificateUpload({mode = 'verify', api, Badge, Result, onChange, health, samples = [], user}) {
   const issuing = mode === 'register';
   const defaultLimits = {max_files: issuing ? 100 : 5, max_file_bytes: 10 * 1024 * 1024, max_batch_bytes: (issuing ? 100 : 5) * 10 * 1024 * 1024};
   const [limits, setLimits] = useState(defaultLimits), [items, setItems] = useState([]), [error, setError] = useState('');
@@ -202,7 +202,8 @@ export default function CertificateUpload({mode = 'verify', api, Badge, Result, 
       const name = document.getElementById('review-name-' + itemId)?.value?.trim() || '';
       const course = document.getElementById('review-course-' + itemId)?.value?.trim() || '';
       const date = document.getElementById('review-date-' + itemId)?.value?.trim() || '';
-      const payload = {action, reference: ref, name, course, issue_date: date};
+      const grade = document.getElementById('review-grade-' + itemId)?.value?.trim() || '';
+      const payload = {action, reference: ref, name, course, issue_date: date, grade};
       const updated = await api(`/uploads/${batch.id}/items/${itemId}/review`, {
         method: 'POST',
         body: JSON.stringify(payload)
@@ -441,15 +442,32 @@ export default function CertificateUpload({mode = 'verify', api, Badge, Result, 
             </div>
           )}
           {issuing && item.result?.fields && (
-            <div className="extracted-metadata-preview">
+            <div className="extracted-metadata-preview" style={{marginTop: '10px', padding: '10px 12px', border: '1px solid var(--border,#e2e8f0)', borderRadius: '6px', background: '#f8fafc'}}>
+              <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px', flexWrap: 'wrap', gap: '6px'}}>
+                <span style={{fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', color: '#475569'}}>
+                  Issuer Reference Metadata <small style={{color: '#94a3b8'}}>(Schema v2026.1)</small>
+                </span>
+                {item.result?.metadata_commitment && (
+                  <span className="reference-pill mono" style={{fontSize: '9px', background: '#dcfce7', color: '#15803d', padding: '2px 6px', borderRadius: '4px'}}>
+                    Cryptographic Commitment Bound
+                  </span>
+                )}
+              </div>
               <div className="extracted-fields-grid">
                 {item.result.fields.name && <div><small>Recipient</small><strong>{item.result.fields.name}</strong></div>}
                 {item.result.fields.course && <div><small>Course/Qualification</small><strong>{item.result.fields.course}</strong></div>}
                 {item.result.fields.institution && <div><small>Institution</small><strong>{item.result.fields.institution}</strong></div>}
                 {item.result.fields.issue_date && <div><small>Issue Date</small><strong>{item.result.fields.issue_date}</strong></div>}
+                {item.result.fields.grade && <div><small>Grade / Result</small><strong>{item.result.fields.grade}</strong></div>}
               </div>
+              {item.result?.metadata_commitment && (
+                <div style={{marginTop: '6px', fontSize: '10px', color: '#64748b'}}>
+                  Commitment Digest: <code className="mono" style={{fontSize: '10px'}}>{item.result.metadata_commitment}</code>
+                  <p style={{margin: '2px 0 0', color: '#94a3b8', fontSize: '9px'}}>Personal metadata remains off-chain; cryptographic commitment proof is stored with the registration.</p>
+                </div>
+              )}
               {item.result.ocr_confidence != null && (
-                <small className="ocr-meta">OCR Confidence: {Math.round(item.result.ocr_confidence)}% ({item.result.extraction_method || 'OCR'})</small>
+                <small className="ocr-meta" style={{display: 'block', marginTop: '4px'}}>OCR Confidence: {Math.round(item.result.ocr_confidence)}% ({item.result.extraction_method || 'OCR'})</small>
               )}
             </div>
           )}
@@ -472,6 +490,9 @@ export default function CertificateUpload({mode = 'verify', api, Badge, Result, 
                 </label>
                 <label style={{fontSize: '0.85rem'}}>Issue Date
                   <input style={{width: '100%', padding: '6px 8px', marginTop: '4px'}} type="date" defaultValue={item.result?.fields?.issue_date || ''} id={'review-date-' + item.id}/>
+                </label>
+                <label style={{fontSize: '0.85rem'}}>Grade / Result
+                  <input style={{width: '100%', padding: '6px 8px', marginTop: '4px'}} defaultValue={item.result?.fields?.grade || ''} id={'review-grade-' + item.id} placeholder="e.g. First Class Honours / Distinction"/>
                 </label>
               </div>
               <div style={{display: 'flex', gap: '8px'}}>
@@ -503,7 +524,7 @@ export default function CertificateUpload({mode = 'verify', api, Badge, Result, 
               </button>
             </div>
           )}
-          {!issuing && item.result && <Result result={item.result} autoScroll={false}/>}
+          {!issuing && item.result && <Result result={item.result} autoScroll={false} user={user}/>}
           {['pending','processing'].includes(item.state) && (
             <p className="upload-footnote">
               {item.status === 'OCR_PROCESSING' ? 'Processing OCR and analyzing document contents…' :

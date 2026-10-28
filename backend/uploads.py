@@ -58,6 +58,14 @@ def initialize_jobs():
             conn.execute("ALTER TABLE upload_items ADD COLUMN ocr_confidence REAL")
         if "metadata" not in item_cols:
             conn.execute("ALTER TABLE upload_items ADD COLUMN metadata TEXT")
+        if "field_analysis" not in item_cols:
+            conn.execute("ALTER TABLE upload_items ADD COLUMN field_analysis TEXT")
+        if "visual_tampering" not in item_cols:
+            conn.execute("ALTER TABLE upload_items ADD COLUMN visual_tampering TEXT")
+        if "transformation_analysis" not in item_cols:
+            conn.execute("ALTER TABLE upload_items ADD COLUMN transformation_analysis TEXT")
+        if "review_routing" not in item_cols:
+            conn.execute("ALTER TABLE upload_items ADD COLUMN review_routing TEXT")
 
         # A chain transaction may have committed before interruption. Never replay it automatically.
         conn.execute("UPDATE upload_items SET state='failed', status='REGISTRATION_STATUS_UNCERTAIN', data=NULL, result=? WHERE state='processing' AND (status='PENDING_BLOCKCHAIN' OR job_id IN (SELECT id FROM upload_jobs WHERE mode='register'))", (json.dumps({'error': 'Processing was interrupted. Check the registry before retrying.', 'status': 'REGISTRATION_STATUS_UNCERTAIN'}),))
@@ -121,9 +129,13 @@ def snapshot(job, user):
         row = conn.execute('SELECT * FROM upload_jobs WHERE id=? AND user_id=?', (job, user['id'])).fetchone()
         if not row:
             raise HTTPException(404, 'Upload batch not found.')
-        items = [dict(r) for r in conn.execute('SELECT id,filename,reference,kind,state,status,ocr_confidence,result FROM upload_items WHERE job_id=? ORDER BY id', (job,))]
+        items = [dict(r) for r in conn.execute('SELECT id,filename,reference,kind,state,status,ocr_confidence,result,field_analysis,visual_tampering,transformation_analysis,review_routing FROM upload_items WHERE job_id=? ORDER BY id', (job,))]
     for item in items:
         item['result'] = json.loads(item['result']) if item['result'] else None
+        item['field_analysis'] = json.loads(item['field_analysis']) if item.get('field_analysis') else (item['result'].get('field_analysis') if item.get('result') else None)
+        item['visual_tampering'] = json.loads(item['visual_tampering']) if item.get('visual_tampering') else (item['result'].get('visual_tampering') if item.get('result') else None)
+        item['transformation_analysis'] = json.loads(item['transformation_analysis']) if item.get('transformation_analysis') else (item['result'].get('transformation_analysis') if item.get('result') else None)
+        item['review_routing'] = json.loads(item['review_routing']) if item.get('review_routing') else (item['result'].get('review_routing') if item.get('result') else None)
         if not item.get('status'):
             if item['state'] == 'succeeded':
                 item['status'] = 'REGISTERED_ON_BLOCKCHAIN' if row['mode'] == 'register' else 'VERIFIED'
@@ -247,13 +259,30 @@ def retry_item(job_id, item_id, user):
 def csv_report(batch):
     stream = io.StringIO(newline='')
     writer = csv.writer(stream)
-    writer.writerow(['Filename', 'Certificate reference', 'Processing status', 'Registration status', 'Outcome', 'Message', 'Transaction hash'])
+    writer.writerow([
+        'Filename', 'Certificate reference', 'Processing status', 'Registration status',
+        'Outcome', 'Message', 'Field Comparison', 'Transformation Advisory', 'Routing Decision', 'Transaction hash'
+    ])
     def safe(value):
         value = str(value or '')
         return "'" + value if value.lstrip().startswith(('=', '+', '-', '@', '\t', '\r', '\n')) else value
     for item in batch['items']:
         result = item['result'] or {}
-        writer.writerow([safe(v) for v in [item['filename'], item['reference'], item['state'], item.get('status') or result.get('status'), result.get('status'), result.get('error') or result.get('message'), result.get('transaction_hash')]])
+        fa = item.get('field_analysis') or result.get('field_analysis') or {}
+        fa_status = fa.get('status', 'unavailable')
+        ta = item.get('transformation_analysis') or result.get('transformation_analysis') or {}
+        ta_status = ta.get('advisory_outcome', 'unknown')
+        rr = item.get('review_routing') or result.get('review_routing') or {}
+        rr_status = rr.get('routing_outcome', 'unknown')
+
+        writer.writerow([safe(v) for v in [
+            item['filename'], item['reference'], item['state'],
+            item.get('status') or result.get('status'),
+            result.get('status') or result.get('category'),
+            result.get('error') or result.get('message'),
+            fa_status, ta_status, rr_status,
+            result.get('transaction_hash')
+        ]])
     return stream.getvalue()
 
 def start_worker(verify, register):
@@ -421,11 +450,17 @@ def start_worker(verify, register):
                         }
                         state = 'failed'
                         status = 'VERIFICATION_UNAVAILABLE'
+                fa_json = json.dumps(result["field_analysis"]) if (isinstance(result, dict) and result.get("field_analysis")) else None
+                vt_json = json.dumps(result["visual_tampering"]) if (isinstance(result, dict) and result.get("visual_tampering")) else None
+                ta_json = json.dumps(result["transformation_analysis"]) if (isinstance(result, dict) and result.get("transformation_analysis")) else None
+                rr_json = json.dumps(result["review_routing"]) if (isinstance(result, dict) and result.get("review_routing")) else None
                 with connect() as conn:
                     if status in ('REGISTRATION_STATUS_UNCERTAIN', 'AWAITING_REVIEW'):
-                        conn.execute('UPDATE upload_items SET state=?,status=?,result=? WHERE id=?', (state, status, json.dumps(result), item['id']))
+                        conn.execute('UPDATE upload_items SET state=?,status=?,result=?,field_analysis=?,visual_tampering=?,transformation_analysis=?,review_routing=? WHERE id=?',
+                                     (state, status, json.dumps(result), fa_json, vt_json, ta_json, rr_json, item['id']))
                     else:
-                        conn.execute('UPDATE upload_items SET state=?,status=?,result=?,data=NULL WHERE id=?', (state, status, json.dumps(result), item['id']))
+                        conn.execute('UPDATE upload_items SET state=?,status=?,result=?,field_analysis=?,visual_tampering=?,transformation_analysis=?,review_routing=?,data=NULL WHERE id=?',
+                                     (state, status, json.dumps(result), fa_json, vt_json, ta_json, rr_json, item['id']))
                     conn.execute("UPDATE upload_jobs SET state='completed' WHERE id=? AND NOT EXISTS(SELECT 1 FROM upload_items WHERE job_id=? AND state IN ('pending','processing','awaiting_review'))", (item['job_id'], item['job_id']))
             except Exception:
                 logging.exception('Upload worker error')
