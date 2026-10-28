@@ -188,7 +188,17 @@ export default function CertificateUpload({mode = 'verify', api, Badge, Result, 
     try {
       const result = await sendBatch(form, setProgress, request.current.signal);
       if (!mounted.current) return;
-      setBatch(result); setItems([]); setRecent(old => [result, ...old].slice(0, 10));
+              // Preserve preview images from the original rows for post‑verification display
+        if (Array.isArray(result.items) && rows.length) {
+          result.items = result.items.map((it, i) => ({
+            ...it,
+            preview: rows[i]?.preview || it.preview,
+          }));
+        }
+        setBatch(result);
+        setItems([]);
+        setRecent(old => [result, ...old].slice(0, 10));
+        if (result.state === 'completed') changed.current?.();
       if (result.state === 'completed') changed.current?.();
     } catch (e) {if (mounted.current) setError(e.message);}
     finally {sendingRef.current = false; if (mounted.current) setSending(false);}
