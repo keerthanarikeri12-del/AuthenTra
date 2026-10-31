@@ -3135,9 +3135,20 @@ function InstitutionsPage({onSelectHistory}) {
                   <h3>{r.name}</h3>
                   <span>{r.institution_domain || (r.email?.includes('@') ? r.email.split('@')[1] : '—')}</span>
                 </div>
-                <Badge status={r.approval_status === 'APPROVED' ? 'verified' : r.approval_status === 'PENDING_APPROVAL' ? 'pending' : r.approval_status === 'SUSPENDED' ? 'suspended' : 'revoked'}>
-                  {r.approval_status}
-                </Badge>
+                <div className="institution-status-stack">
+                  <Badge status={r.approval_status === 'APPROVED' ? 'verified' : r.approval_status === 'PENDING_APPROVAL' ? 'pending' : r.approval_status === 'SUSPENDED' ? 'suspended' : 'revoked'}>
+                    {r.approval_status}
+                  </Badge>
+                  {r.approved ? (
+                    <span className="badge onchain">
+                      <span className="badge-dot"/> Synchronized on Contract
+                    </span>
+                  ) : (
+                    <span className="badge offchain">
+                      <span className="badge-dot"/> Not Authorized on Contract
+                    </span>
+                  )}
+                </div>
               </div>
 
               <div className="institution-meta-table">
@@ -3159,13 +3170,7 @@ function InstitutionsPage({onSelectHistory}) {
                 </div>
                 <div className="institution-meta-row">
                   <span className="label">On-Chain State:</span>
-                  <span className="val">
-                    {r.approved ? (
-                      <span className="badge onchain" style={{fontSize: '9px', padding: '2px 6px'}}>Synchronized on Contract</span>
-                    ) : (
-                      <span className="badge offchain" style={{fontSize: '9px', padding: '2px 6px'}}>Not Authorized on Contract</span>
-                    )}
-                  </span>
+                  <span className="val">{r.approved ? 'Synchronized on Contract' : 'Not Authorized on Contract'}</span>
                 </div>
               </div>
 
