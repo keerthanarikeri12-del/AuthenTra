@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional, Tuple
 FIELD_SCHEMA_VERSION = "2026.1"
 
 CRITICAL_FIELDS = ["recipient_name", "certificate_reference", "course", "issue_date", "grade"]
-ALL_FIELDS = ["recipient_name", "institution_name", "course", "certificate_reference", "issue_date", "grade"]
+ALL_FIELDS = ["recipient_name", "institution_name", "course", "certificate_reference", "issue_date", "grade", "venue"]
 
 FIELD_ALIASES = {
     "name": "recipient_name",
@@ -32,6 +32,13 @@ FIELD_ALIASES = {
     "result": "grade",
     "classification": "grade",
     "gpa": "grade",
+    "venue": "venue",
+    "location": "venue",
+    "place": "venue",
+    "campus": "venue",
+    "city": "venue",
+    "centre": "venue",
+    "center": "venue",
 }
 
 
@@ -161,6 +168,13 @@ def normalize_grade(val: Optional[str]) -> Optional[str]:
     return clean.upper()
 
 
+def normalize_venue(val: Optional[str]) -> Optional[str]:
+    clean = _normalize_whitespace(val)
+    if not clean:
+        return None
+    return clean.lower()
+
+
 NORMALIZERS = {
     "recipient_name": normalize_recipient_name,
     "institution_name": normalize_institution_name,
@@ -168,6 +182,7 @@ NORMALIZERS = {
     "certificate_reference": normalize_reference,
     "issue_date": normalize_date,
     "grade": normalize_grade,
+    "venue": normalize_venue,
 }
 
 
@@ -253,24 +268,68 @@ def compare_single_field(field_name: str, registered_val: Optional[str], observe
         }
 
 
+def _fallback_observed_fields(extracted_fields: Dict[str, Any], extraction_method: Optional[str] = None) -> Dict[str, Any]:
+    canonical_observed = canonical_metadata_dict(extracted_fields)
+    for alias, target in FIELD_ALIASES.items():
+        if not canonical_observed.get(target) and extracted_fields.get(alias):
+            canonical_observed[target] = str(extracted_fields[alias])
+    field_results = {}
+    for f in ALL_FIELDS:
+        obs = canonical_observed.get(f)
+        field_results[f] = {
+            "registered_value": None,
+            "observed_value": obs,
+            "status": "unregistered_field" if obs else "missing",
+            "explanation": "Observed in document; no verified reference record available." if obs else f"No {f.replace('_', ' ')} detected in document.",
+            "extraction_method": extraction_method or "OCR",
+            "is_critical": f in CRITICAL_FIELDS,
+        }
+    if "certificate_reference" in field_results and "reference" not in field_results:
+        field_results["reference"] = field_results["certificate_reference"]
+    if "institution_name" in field_results and "institution" not in field_results:
+        field_results["institution"] = field_results["institution_name"]
+    return field_results
+
+
 def compare_fields(registered_record: Optional[Dict[str, Any]], extracted_fields: Dict[str, Any],
                    extraction_method: Optional[str] = None, ocr_confidence: Optional[float] = None,
                    trusted_issuer: Optional[str] = None, trusted_hash: Optional[str] = None) -> Dict[str, Any]:
     """Execute conservative, deterministic field-level comparison against authenticated reference."""
-    if not registered_record or not registered_record.get("confirmed_metadata"):
+    if not registered_record:
+        fb_fields = _fallback_observed_fields(extracted_fields, extraction_method)
+        has_any = any(r["observed_value"] for r in fb_fields.values())
+        return {
+            "status": "UNREGISTERED_DOCUMENT" if has_any else "unavailable",
+            "schema_version": FIELD_SCHEMA_VERSION,
+            "explanation": "Document fields were extracted by OCR for inspection. No registered reference record exists on blockchain to compare against." if has_any else "No authenticated reference metadata is bound to this registration record. Field comparison is unavailable.",
+            "summary": {
+                "total_fields": sum(1 for r in fb_fields.values() if r["observed_value"]),
+                "matched": 0,
+                "changed": 0,
+                "missing": sum(1 for r in fb_fields.values() if not r["observed_value"]),
+                "ambiguous": 0,
+                "unreadable": 0,
+                "unregistered_field": sum(1 for r in fb_fields.values() if r["observed_value"]),
+            },
+            "fields": fb_fields,
+            "commitment_verified": False,
+        }
+
+    if not registered_record.get("confirmed_metadata"):
+        fb_fields = _fallback_observed_fields(extracted_fields, extraction_method)
         return {
             "status": "unavailable",
-            "schema_version": FIELD_SCHEMA_VERSION,
+            "schema_version": registered_record.get("metadata_schema_version", FIELD_SCHEMA_VERSION),
             "explanation": "No authenticated reference metadata is bound to this registration record. Field comparison is unavailable.",
             "summary": {
-                "total_fields": 0,
+                "total_fields": sum(1 for r in fb_fields.values() if r["observed_value"]),
                 "matched": 0,
                 "changed": 0,
                 "missing": 0,
                 "ambiguous": 0,
                 "unreadable": 0,
             },
-            "fields": {},
+            "fields": fb_fields,
             "commitment_verified": False,
         }
 
@@ -279,12 +338,13 @@ def compare_fields(registered_record: Optional[Dict[str, Any]], extracted_fields
         if not isinstance(confirmed, dict):
             raise ValueError("Metadata must be an object")
     except (TypeError, ValueError):
+        fb_fields = _fallback_observed_fields(extracted_fields, extraction_method)
         return {
             "status": "unavailable",
             "schema_version": registered_record.get("metadata_schema_version", FIELD_SCHEMA_VERSION),
             "explanation": "Corrupted reference metadata payload in registration record.",
             "summary": {"total_fields": 0, "matched": 0, "changed": 0, "missing": 0, "ambiguous": 0, "unreadable": 0},
-            "fields": {},
+            "fields": fb_fields,
             "commitment_verified": False,
         }
 
@@ -314,10 +374,11 @@ def compare_fields(registered_record: Optional[Dict[str, Any]], extracted_fields
             commitment_verified = False
 
     if not commitment_verified:
+        fb_fields = _fallback_observed_fields(extracted_fields, extraction_method)
         return {
             "status": "unavailable", "schema_version": FIELD_SCHEMA_VERSION,
             "explanation": "Reference metadata commitment, issuer signature, or blockchain binding is missing or invalid; comparison cannot be trusted.",
-            "fields": {}, "summary": {}, "commitment_verified": False,
+            "fields": fb_fields, "summary": {"total_fields": sum(1 for r in fb_fields.values() if r["observed_value"]), "matched": 0, "changed": 0, "missing": 0, "ambiguous": 0, "unreadable": 0}, "commitment_verified": False,
             "critical_field_changed": False, "all_fields_match": False,
         }
 

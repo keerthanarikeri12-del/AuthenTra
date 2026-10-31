@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 import sys
 from pathlib import Path
@@ -7,9 +8,9 @@ os.environ["AUTHENTRA_DEMO"] = "1"
 from reportlab.pdfgen import canvas
 from reportlab.lib.colors import HexColor
 import pypdfium2 as pdfium
-from backend.registry import Registry
 from backend.storage import initialize, seed_demo, connect, ROOT
-from backend.main import register_document
+from backend.main import _persist_reference_preview
+from backend.fields import canonical_metadata_dict, compute_metadata_commitment, FIELD_SCHEMA_VERSION
 
 def prepare_demo():
     samples = ROOT / "samples"
@@ -42,14 +43,52 @@ def prepare_demo():
             page = pdf[0]; bitmap = page.render(scale=1.5); bitmap.to_pil().save(samples / 'scan.png'); bitmap.close(); page.close()
         finally:
             pdf.close()
-    initialize(); chain = Registry(); seed_demo(chain)
+    initialize()
+    chain = None
+    try:
+        from backend.registry import Registry
+        chain = Registry()
+        seed_demo(chain)
+    except Exception as exc:
+        print(f"Blockchain registry unavailable for demo seeding: {exc}")
+
     with connect() as conn:
         issuer = dict(conn.execute("SELECT * FROM users WHERE email='issuer@authentra.demo'").fetchone())
     for filename, reference in [('original.pdf','AT-2026-0001'),('revoked.pdf','AT-2026-0002')]:
-        if chain.lookup(reference) is None:
-            register_document((samples / filename).read_bytes(), 'pdf', reference, issuer)
-    if not chain.lookup('AT-2026-0002')['revoked']:
-        chain.revoke('AT-2026-0002', issuer['wallet'])
+        data_bytes = (samples / filename).read_bytes()
+        _persist_reference_preview(data_bytes, 'pdf', reference, issuer['id'])
+        meta = {
+            "recipient_name": "Alex Morgan",
+            "institution_name": "Meridian Institute of Technology",
+            "course": "Blockchain Fundamentals",
+            "certificate_reference": reference,
+            "issue_date": "2025-06-12",
+            "grade": None,
+            "venue": None,
+        }
+        canon = canonical_metadata_dict(meta)
+        meta_json = json.dumps(canon)
+        comm = compute_metadata_commitment(meta, reference, hashlib.sha256(data_bytes).hexdigest().lower())
+        with connect() as conn:
+            conn.execute(
+                "UPDATE registrations SET confirmed_metadata=?, metadata_commitment=?, metadata_schema_version=? WHERE reference=?",
+                (meta_json, comm, FIELD_SCHEMA_VERSION, reference)
+            )
+            if chain:
+                try:
+                    if chain.lookup(reference) is None:
+                        from backend.main import register_document
+                        register_document(data_bytes, 'pdf', reference, issuer)
+                except Exception:
+                    pass
+
+    if chain:
+        try:
+            rec = chain.lookup('AT-2026-0002')
+            if rec and not rec['revoked']:
+                chain.revoke('AT-2026-0002', issuer['wallet'])
+        except Exception:
+            pass
     print('Demo certificates ready: original, modified, unregistered, revoked and scanned copy.')
 
 

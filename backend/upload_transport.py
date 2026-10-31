@@ -57,7 +57,7 @@ class UploadTransport:
                     async def replay():
                         nonlocal remaining
                         if remaining <= 0:
-                            return await receive()
+                            return {'type': 'http.request', 'body': b'', 'more_body': False}
                         chunk = await run_in_threadpool(body.read, min(65536, remaining))
                         remaining -= len(chunk)
                         return {'type': 'http.request', 'body': chunk, 'more_body': remaining > 0}
@@ -67,4 +67,11 @@ class UploadTransport:
             finally:
                 self.active -= 1
         except HTTPException as exc:
+            try:
+                while True:
+                    msg = await receive()
+                    if msg['type'] == 'http.disconnect' or not msg.get('more_body', False):
+                        break
+            except Exception:
+                pass
             await JSONResponse({'detail': exc.detail}, status_code=exc.status_code, headers={'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff'})(scope, receive, send)

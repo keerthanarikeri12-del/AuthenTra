@@ -876,6 +876,8 @@ def process_verification(data, kind, supplied_reference, user, file_name=None, f
         "course": analysis["fields"].get("course"),
         "institution": analysis["fields"].get("institution") or issuer_name,
         "issue_date": analysis["fields"].get("issue_date"),
+        "venue": analysis["fields"].get("venue"),
+        "grade": analysis["fields"].get("grade"),
         "registered_at": reg_date,
         "file_hash": digest,
         "registered_hash": record["file_hash"] if record else None,

@@ -6,6 +6,12 @@ const langPath = path.join(path.dirname(require.resolve('@tesseract.js-data/eng/
 let worker;
 try {
   worker = await createWorker('eng', 1, { langPath, cacheMethod: 'none', logger: () => {} });
+  try {
+    await worker.setParameters({
+      tessedit_pageseg_mode: '3',
+      preserve_interword_spaces: '1'
+    });
+  } catch {}
   const { data } = await worker.recognize(process.argv[2]);
   console.log(JSON.stringify({ text: data.text, confidence: data.confidence }));
 } finally { if (worker) await worker.terminate(); }
