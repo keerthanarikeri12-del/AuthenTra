@@ -1,4 +1,5 @@
 import hashlib
+import io
 import json
 import os
 import re
@@ -798,7 +799,15 @@ def process_verification(data, kind, supplied_reference, user, file_name=None, f
     )
 
     # 2. Visual tampering localization
-    visual_analysis = analyze_visual_tampering(data, kind)
+    ref_image_data = None
+    if reference and not hash_matches:
+        try:
+            from .visual_tampering import get_reference_asset
+            ref_image_data = get_reference_asset(reference)
+        except Exception:
+            ref_image_data = None
+
+    visual_analysis = analyze_visual_tampering(data, kind, reference_image_data=ref_image_data)
     if hash_matches:
         visual_analysis = {
             "status": "not_required", "regions": [], "suspicious_regions": [],
@@ -1131,6 +1140,18 @@ def register_document(data, kind, reference, user, metadata_override=None):
         return _register_document(data, kind, reference, dict(latest), metadata_override=metadata_override)
 
 
+def _persist_reference_preview(data, kind, reference, user_id):
+    try:
+        from .visual_tampering import load_analysis_image, store_reference_asset
+        ref_pil = load_analysis_image(data, kind, page_index=0)
+        if ref_pil is not None:
+            buf = io.BytesIO()
+            ref_pil.save(buf, format="PNG")
+            store_reference_asset(reference, user_id, buf.getvalue(), asset_type="preview_png")
+    except Exception:
+        pass
+
+
 def _register_document(data, kind, reference, user, metadata_override=None):
     role(user, "institution")
     ensure_active(user)
@@ -1250,6 +1271,7 @@ def _register_document(data, kind, reference, user, metadata_override=None):
                 """, (reference, user["id"], digest, str(network_info["chain_id"]), chain.contract.address, str(on_chain["registered_at"]), metadata_json,
                       FIELD_SCHEMA_VERSION, metadata_json, metadata_commitment, issuer_sig, committed_at))
                 audit(conn, user["id"], "register_idempotent", reference, None)
+            _persist_reference_preview(data, kind, reference, user["id"])
             return {
                 "reference": reference,
                 "file_hash": digest,
@@ -1302,6 +1324,7 @@ def _register_document(data, kind, reference, user, metadata_override=None):
         ))
         audit(conn, user["id"], "register_confirmed", reference, tx_hash)
 
+    _persist_reference_preview(data, kind, reference, user["id"])
     explorer_url = chain.get_explorer_url(tx_hash)
     return {
         "reference": reference,
@@ -1579,6 +1602,8 @@ def delete_reference_preview(reference: str, user: User):
         if canon == ROLE_INSTITUTION_ADMIN and row["issuer_id"] != user["id"]:
             raise HTTPException(403, "Institutions can only delete their own reference preview assets.")
         preview_path = Path(row["preview_path"])
+        if not preview_path.is_absolute():
+            preview_path = ROOT / preview_path
         if preview_path.exists():
             preview_path.unlink(missing_ok=True)
         conn.execute("DELETE FROM reference_assets WHERE reference=?", (reference,))
@@ -1687,12 +1712,14 @@ def approve(institution_id: int, body: Approval, user: User, request: Request):
     if not reason:
         reason = f"Administrative decision by {user.get('email', 'admin')}: set status to {status}."
 
+    from web3 import Web3
+    wallet_addr = institution.get("wallet")
+    if not wallet_addr or not Web3.is_address(wallet_addr):
+        raise HTTPException(422, "Institution does not have a valid Ethereum wallet address.")
+
     chain = registry()
     approved = (status == "APPROVED")
-    if approved and institution["wallet"] not in chain.keys:
-        raise HTTPException(409, "Configure the institution server-side signer before approval.")
-
-    transaction = safe_chain_action(lambda: chain.set_issuer(institution["wallet"], approved))
+    transaction = safe_chain_action(lambda: chain.set_issuer(wallet_addr, approved))
 
     ip = request.client.host if request.client else "local"
     with connect() as conn:

@@ -208,6 +208,39 @@ def align_and_compare_reference(submitted: Image.Image, reference: Image.Image) 
     return regions[:8], mean_diff
 
 
+# Optional pluggable trained model registry
+_REGISTERED_MODEL: Optional[Dict[str, Any]] = None
+
+
+def register_tampering_model(
+    name: str,
+    predict_fn,
+    technique: str = "Trained Neural Tampering Localization",
+    license: Optional[str] = "Proprietary",
+    limitations: Optional[str] = "Trained model inference. Requires validation on out-of-distribution certificate templates.",
+) -> None:
+    """Register a trained machine learning model for blind tampering localization."""
+    global _REGISTERED_MODEL
+    _REGISTERED_MODEL = {
+        "name": name,
+        "predict_fn": predict_fn,
+        "technique": technique,
+        "license": license,
+        "limitations": limitations,
+    }
+
+
+def unregister_tampering_model() -> None:
+    """Unregister the currently active tampering model (restoring uncalibrated default)."""
+    global _REGISTERED_MODEL
+    _REGISTERED_MODEL = None
+
+
+def get_active_tampering_model() -> Optional[Dict[str, Any]]:
+    """Return the active model configuration if available."""
+    return _REGISTERED_MODEL
+
+
 def analyze_visual_tampering(data: bytes, kind: str, reference_image_data: Optional[bytes] = None,
                              page_number: int = 1) -> Dict[str, Any]:
     """Comprehensive visual tampering localization supporting PDFs and images."""
@@ -242,9 +275,11 @@ def analyze_visual_tampering(data: bytes, kind: str, reference_image_data: Optio
             "duration_ms": round((time.perf_counter() - t0) * 1000, 1),
         }
 
+    model_config = get_active_tampering_model()
+
     # ELA alone cannot establish tampering, particularly on rendered PDFs/PNGs.
     # Do not turn compression edges into fabricated model predictions.
-    if not reference_image_data:
+    if not reference_image_data and not model_config:
         return {
             "status": "unavailable", "page": page_number,
             "regions": [], "suspicious_regions": [], "anomaly_score": None,
@@ -253,9 +288,22 @@ def analyze_visual_tampering(data: bytes, kind: str, reference_image_data: Optio
             "duration_ms": round((time.perf_counter() - t0) * 1000, 1),
         }
 
+    model_regions = []
+    anomaly_score = None
+    if model_config:
+        try:
+            pred_regions, pred_score = model_config["predict_fn"](page_img)
+            model_regions = pred_regions or []
+            anomaly_score = pred_score
+            provenance["model_name"] = model_config["name"]
+            provenance["technique"] = model_config["technique"]
+            provenance["license"] = model_config["license"]
+            provenance["limitations"] = model_config["limitations"]
+        except Exception:
+            model_regions = []
+
     # Compression diagnostics are not trained-model detections.
     ela_img, ela_mean = compute_ela_image(page_img, quality=CONFIG["ela_quality"], scale=CONFIG["ela_scale"])
-    model_regions = []
 
     # 2. Reference Image Alignment (if provided from authorized institution source)
     reference_regions = []
@@ -281,23 +329,29 @@ def analyze_visual_tampering(data: bytes, kind: str, reference_image_data: Optio
 
     # Construct accessible textual description
     if not all_regions:
-        acc_text = f"Page {page_number}: No pixel differences exceeded the comparison threshold. This does not rule out edits. No trained forensic model was run."
-        status = "reference_comparison_only"
+        if reference_image_data:
+            acc_text = f"Page {page_number}: No pixel differences exceeded the comparison threshold. This does not rule out edits. No trained forensic model was run."
+            status = "reference_comparison_only"
+        else:
+            acc_text = f"Page {page_number}: Visual inspection completed by {provenance.get('model_name') or 'model'}. No anomalous regions detected."
+            status = "clear"
     else:
-        counts_model = sum(1 for r in all_regions if r["type"] == "model_anomaly")
-        counts_ref = sum(1 for r in all_regions if r["type"] == "reference_difference")
+        counts_model = sum(1 for r in all_regions if r.get("type") == "model_anomaly")
+        counts_ref = sum(1 for r in all_regions if r.get("type") == "reference_difference")
         parts = [f"Page {page_number}: Visual inspection identified {len(all_regions)} region(s) of interest."]
         if counts_model:
-            parts.append(f"{counts_model} region(s) exhibit compression rate anomalies consistent with localized editing or copy-paste insertions.")
+            parts.append(f"{counts_model} region(s) exhibit anomalies detected by {provenance.get('model_name') or 'trained forensic model'}.")
         if counts_ref:
             parts.append(f"{counts_ref} region(s) exhibit visual differences compared against the authorized institutional template.")
         for idx, r in enumerate(all_regions, 1):
             box = r["box"]
             parts.append(f"Region {idx} ({r['type']}): at horizontal {box[0]*100:.0f}%, vertical {box[1]*100:.0f}%, span {box[2]*100:.0f}%x{box[3]*100:.0f}%. {r['explanation']}")
         acc_text = " ".join(parts)
-        status = "reference_comparison_only"
+        if reference_regions:
+            status = "reference_comparison_only"
+        else:
+            status = "suspicious_regions_detected"
 
-    max_score = None
     return {
         "status": status,
         "page": page_number,
@@ -305,14 +359,14 @@ def analyze_visual_tampering(data: bytes, kind: str, reference_image_data: Optio
         "regions": all_regions,
         "suspicious_regions": all_regions,
         "model_provenance": provenance.get("technique") or "Error Level Analysis",
-        "anomaly_score": None,
+        "anomaly_score": anomaly_score,
         "summary": {
             "total_regions": len(all_regions),
-            "model_anomalies": sum(1 for r in all_regions if r["type"] == "model_anomaly"),
-            "reference_differences": sum(1 for r in all_regions if r["type"] == "reference_difference"),
+            "model_anomalies": sum(1 for r in all_regions if r.get("type") == "model_anomaly"),
+            "reference_differences": sum(1 for r in all_regions if r.get("type") == "reference_difference"),
             "global_ela_mean": round(ela_mean, 2),
             "reference_diff_mean": round(ref_diff_mean, 2) if ref_diff_mean is not None else None,
-            "anomaly_score": None,
+            "anomaly_score": anomaly_score,
         },
         "accessible_description": acc_text,
         "provenance": provenance,
@@ -322,9 +376,19 @@ def analyze_visual_tampering(data: bytes, kind: str, reference_image_data: Optio
 
 def store_reference_asset(reference: str, institution_id: int, data: bytes, asset_type: str = "preview_png") -> bool:
     """Store an authorized reference asset for alignment with explicit consent."""
+    if not reference or not data:
+        return False
     from .storage import connect
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc).isoformat()
+    assets_dir = ROOT / "assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    asset_file = assets_dir / f"{reference}.png"
+    try:
+        asset_file.write_bytes(data)
+    except Exception:
+        return False
+
     with connect() as conn:
         conn.execute(
             """INSERT OR REPLACE INTO reference_assets 
@@ -333,6 +397,26 @@ def store_reference_asset(reference: str, institution_id: int, data: bytes, asse
             (reference, institution_id, f"assets/{reference}.png", now)
         )
     return True
+
+
+def get_reference_asset(reference: str) -> Optional[bytes]:
+    """Retrieve the authorized reference asset bytes for a given certificate reference."""
+    if not reference:
+        return None
+    from .storage import connect
+    try:
+        with connect() as conn:
+            row = conn.execute("SELECT preview_path FROM reference_assets WHERE reference=?", (reference,)).fetchone()
+            if not row or not row["preview_path"]:
+                return None
+            p = Path(row["preview_path"])
+            if not p.is_absolute():
+                p = ROOT / p
+            if p.exists():
+                return p.read_bytes()
+    except Exception:
+        pass
+    return None
 
 
 def delete_reference_asset(reference: str, user_id: int, user_role: str) -> bool:
@@ -348,5 +432,11 @@ def delete_reference_asset(reference: str, user_id: int, user_role: str) -> bool
             return False
         if canon == ROLE_INSTITUTION_ADMIN and row["issuer_id"] != user_id:
             raise HTTPException(403, "Institutions can only delete their own reference preview assets.")
+        if row["preview_path"]:
+            p = Path(row["preview_path"])
+            if not p.is_absolute():
+                p = ROOT / p
+            if p.exists():
+                p.unlink(missing_ok=True)
         conn.execute("DELETE FROM reference_assets WHERE reference=?", (reference,))
     return True
