@@ -35,7 +35,7 @@ def render_pdf_page(data: bytes, page_index: int = 0, target_scale: float = 1.5)
             page = pdf[page_index]
             w, h = page.get_size()
             max_scale = min(target_scale, (CONFIG["max_pixels"] / (w * h)) ** 0.5)
-            bitmap = page.render(scale=max(0.5, max_scale))
+            bitmap = page.render(scale=max_scale)
             pil_img = bitmap.to_pil().convert("RGB")
             bitmap.close()
             page.close()
@@ -181,29 +181,31 @@ def align_and_compare_reference(submitted: Image.Image, reference: Image.Image) 
     diff = np.abs(arr_sub - arr_ref)
     mean_diff = float(np.mean(diff))
 
-    # Identify distinct structural blocks (e.g. replaced text or badge)
+    # Difference components describe pixels, not a probability of tampering.
+    from scipy import ndimage
+    mask = diff > 30.0
+    grouped = ndimage.binary_dilation(mask, iterations=2)
+    labels, _ = ndimage.label(grouped)
     h, w = diff.shape
-    step_y, step_x = max(h // 20, 10), max(w // 20, 10)
     regions = []
-    for y in range(0, h - step_y + 1, step_y):
-        for x in range(0, w - step_x + 1, step_x):
-            patch = diff[y:y + step_y, x:x + step_x]
-            p_mean = float(np.mean(patch))
-            if p_mean > 45.0:  # Significant visual difference
-                regions.append({
-                    "box": [round(x / w, 4), round(y / h, 4), round(step_x / w, 4), round(step_y / h, 4)],
-                    "raw_score": round(p_mean, 2),
-                    "confidence": round(min(0.95, p_mean / 255.0 * 2.0), 2),
-                    "type": "reference_difference",
-                    "label": "Visual difference from authorized reference template",
-                    "explanation": f"Visual content differs from authorized reference image in patch [{round(x/w, 3)}, {round(y/h, 3)}]."
-                })
-
-    merged_diffs = _merge_boxes(regions)
-    for d in merged_diffs:
-        d["type"] = "reference_difference"
-        d["label"] = "Visual difference from authorized reference template"
-    return merged_diffs[:8], mean_diff
+    for index, bounds in enumerate(ndimage.find_objects(labels), start=1):
+        if bounds is None:
+            continue
+        ys, xs = bounds
+        changed = int(np.count_nonzero(mask[ys, xs] & (labels[ys, xs] == index)))
+        if changed < 8:
+            continue
+        box = [round(xs.start / w, 4), round(ys.start / h, 4),
+               round((xs.stop - xs.start) / w, 4), round((ys.stop - ys.start) / h, 4)]
+        regions.append({
+            "box": box, "bbox": box, "changed_pixels": changed,
+            "raw_score": round(float(np.mean(diff[ys, xs])), 2),
+            "confidence": None, "score": None, "type": "reference_difference",
+            "label": "Pixel difference from supplied reference",
+            "explanation": "Pixel difference only; editing history is unknown.",
+        })
+    regions.sort(key=lambda r: (-r["changed_pixels"], r["box"]))
+    return regions[:8], mean_diff
 
 
 def analyze_visual_tampering(data: bytes, kind: str, reference_image_data: Optional[bytes] = None,
@@ -211,9 +213,9 @@ def analyze_visual_tampering(data: bytes, kind: str, reference_image_data: Optio
     """Comprehensive visual tampering localization supporting PDFs and images."""
     t0 = time.perf_counter()
     provenance = {
-        "model_name": "AuthenTra ELA Multi-Scale Forensic Localization v1.0",
-        "technique": "Error Level Analysis & Structural Gradient Mapping",
-        "license": "Apache 2.0 (AuthenTra Internal Model Suite)",
+        "model_name": None,
+        "technique": "Uncalibrated image comparison; no trained localization model installed",
+        "license": None,
         "hardware": "CPU-optimized",
         "limitations": "Advisory evidence. Cannot distinguish deliberate forgery from intentional re-saving or multi-generation JPEG artifacts without reference verification.",
     }
@@ -240,9 +242,20 @@ def analyze_visual_tampering(data: bytes, kind: str, reference_image_data: Optio
             "duration_ms": round((time.perf_counter() - t0) * 1000, 1),
         }
 
-    # 1. Forensic ELA Analysis
+    # ELA alone cannot establish tampering, particularly on rendered PDFs/PNGs.
+    # Do not turn compression edges into fabricated model predictions.
+    if not reference_image_data:
+        return {
+            "status": "unavailable", "page": page_number,
+            "regions": [], "suspicious_regions": [], "anomaly_score": None,
+            "model_provenance": provenance["technique"], "provenance": provenance,
+            "accessible_description": "No trained tampering localization model or authorized reference image is available. No conclusion about visual alteration can be made.",
+            "duration_ms": round((time.perf_counter() - t0) * 1000, 1),
+        }
+
+    # Compression diagnostics are not trained-model detections.
     ela_img, ela_mean = compute_ela_image(page_img, quality=CONFIG["ela_quality"], scale=CONFIG["ela_scale"])
-    model_regions = detect_suspicious_patches(ela_img, page_img.size)
+    model_regions = []
 
     # 2. Reference Image Alignment (if provided from authorized institution source)
     reference_regions = []
@@ -258,6 +271,9 @@ def analyze_visual_tampering(data: bytes, kind: str, reference_image_data: Optio
         r["page"] = page_number
         all_regions.append(r)
     for r in reference_regions:
+        r["confidence"] = None
+        r["score"] = None
+        r["explanation"] = "Pixel difference after resizing only; alignment and the cause of this difference are not established."
         r["page"] = page_number
         all_regions.append(r)
 
@@ -265,8 +281,8 @@ def analyze_visual_tampering(data: bytes, kind: str, reference_image_data: Optio
 
     # Construct accessible textual description
     if not all_regions:
-        acc_text = f"Page {page_number}: Visual inspection completed. No anomalous compression discrepancies or unexpected localized edits were detected. Background JPEG artifact levels are consistent across the document."
-        status = "clear"
+        acc_text = f"Page {page_number}: No pixel differences exceeded the comparison threshold. This does not rule out edits. No trained forensic model was run."
+        status = "reference_comparison_only"
     else:
         counts_model = sum(1 for r in all_regions if r["type"] == "model_anomaly")
         counts_ref = sum(1 for r in all_regions if r["type"] == "reference_difference")
@@ -279,9 +295,9 @@ def analyze_visual_tampering(data: bytes, kind: str, reference_image_data: Optio
             box = r["box"]
             parts.append(f"Region {idx} ({r['type']}): at horizontal {box[0]*100:.0f}%, vertical {box[1]*100:.0f}%, span {box[2]*100:.0f}%x{box[3]*100:.0f}%. {r['explanation']}")
         acc_text = " ".join(parts)
-        status = "suspicious_regions_detected"
+        status = "reference_comparison_only"
 
-    max_score = max([r.get("confidence", 0.0) for r in all_regions], default=0.0) if all_regions else 0.0
+    max_score = None
     return {
         "status": status,
         "page": page_number,
@@ -289,14 +305,14 @@ def analyze_visual_tampering(data: bytes, kind: str, reference_image_data: Optio
         "regions": all_regions,
         "suspicious_regions": all_regions,
         "model_provenance": provenance.get("technique") or "Error Level Analysis",
-        "anomaly_score": round(max_score, 2),
+        "anomaly_score": None,
         "summary": {
             "total_regions": len(all_regions),
             "model_anomalies": sum(1 for r in all_regions if r["type"] == "model_anomaly"),
             "reference_differences": sum(1 for r in all_regions if r["type"] == "reference_difference"),
             "global_ela_mean": round(ela_mean, 2),
             "reference_diff_mean": round(ref_diff_mean, 2) if ref_diff_mean is not None else None,
-            "anomaly_score": round(max_score, 2),
+            "anomaly_score": None,
         },
         "accessible_description": acc_text,
         "provenance": provenance,

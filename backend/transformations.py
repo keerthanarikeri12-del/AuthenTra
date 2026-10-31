@@ -91,10 +91,10 @@ def analyze_transformations(
             "explanation": "Uploaded file is identical to the registered on-chain document byte-for-byte.",
             "transformation_type": "none",
             "confidence": 1.0,
-            "image_quality": {"sharpness_laplacian": 1000.0, "sharpness": 1000.0, "noise_estimate": 0.0, "noise_sigma": 0.0, "blockiness": 0.0},
-            "skew_angle": 0.0,
-            "ocr_reliability": ocr_confidence if ocr_confidence is not None else 100.0,
-            "visual_anomaly_score": 0.0,
+            "image_quality": None,
+            "skew_angle": None,
+            "ocr_reliability": ocr_confidence,
+            "visual_anomaly_score": None,
             "evidence": {
                 "hash_matched": True,
                 "rescan_detected": False,
@@ -119,7 +119,7 @@ def analyze_transformations(
             "image_quality": None,
             "skew_angle": 0.0,
             "ocr_reliability": ocr_confidence,
-            "visual_anomaly_score": 0.0,
+            "visual_anomaly_score": None,
             "evidence": {"renderable": False},
             "limitations": "Advisory analysis only. Upload may be corrupted, encrypted, or unsupported.",
         }
@@ -142,6 +142,9 @@ def analyze_transformations(
         likely_trans = "image_recompression"
     else:
         likely_trans = "re_saved_digital_copy"
+
+    # A single image's quality cannot determine its editing history.
+    likely_trans = "unknown"
 
     # Evaluate field comparison evidence
     field_status = field_comparison.get("status") if field_comparison else "unavailable"
@@ -173,7 +176,7 @@ def analyze_transformations(
         risk_level = "medium"
     elif all_fields_match:
         advisory_outcome = "FIELDS_AGREE_RESAVE_OR_REEXPORT"
-        headline = "Fields Agree; Differences Consistent with Rescan or Re-Export"
+        headline = "Registered Fields Agree; Cause of File Difference Unknown"
         if likely_trans == "pdf_reexport":
             explanation = (
                 "All authenticated reference fields match the institution record. The hash mismatch is consistent "
@@ -189,7 +192,12 @@ def analyze_transformations(
                 "All authenticated reference fields match the institution record. The hash mismatch is consistent "
                 "with image compression, resizing, or format conversion."
             )
-        risk_level = "low"
+        explanation = (
+            "Compared registered fields agree. Scanning, compression, re-export, or edits to other "
+            "content could explain the different bytes. These measurements cannot determine which "
+            "occurred. Institution review is required."
+        )
+        risk_level = "undetermined"
     else:
         advisory_outcome = "INSUFFICIENT_EVIDENCE"
         headline = "Insufficient Evidence to Assess Transformation"
@@ -207,10 +215,12 @@ def analyze_transformations(
         "explanation": explanation,
         "risk_level": risk_level,
         "transformation_type": likely_trans,
+        "confidence": None,
+        "method": "deterministic_evidence_rules_not_trained_classifier",
         "image_quality": quality,
         "skew_angle": skew,
         "ocr_reliability": ocr_confidence,
-        "visual_anomaly_score": 1.0 if has_visual_tampering else 0.0,
+        "visual_anomaly_score": None,
         "evidence": {
             "field_comparison_status": field_status,
             "fields_match": all_fields_match,

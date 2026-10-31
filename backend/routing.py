@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import HTTPException
 from .storage import connect, canonical_role, ROLE_INSTITUTION_ADMIN, ROLE_SYSTEM_ADMIN
 
-POLICY_VERSION = "2026.1"
+POLICY_VERSION = "2026.2"
 
 # Configurable routing policy parameters
 DEFAULT_POLICY = {
@@ -46,7 +46,8 @@ def assess_layout_familiarity(text: str, fields: Dict[str, Any], quality: Option
         "familiarity_score": round(familiarity_score, 2),
         "is_unfamiliar": is_unfamiliar,
         "label": label,
-        "calibration_note": "Calibrated against multi-institution test layouts; heuristic score, not a posterior probability.",
+        "calibration_note": "Uncalibrated keyword heuristic; not evidence of familiarity with an issuer's template.",
+        "method": "keyword_heuristic",
     }
 
 
@@ -63,6 +64,8 @@ def determine_review_routing(
     """Route document to appropriate review workflow or automatic advisory completion."""
     pol = policy or DEFAULT_POLICY
     reasons = []
+    if verification_status != "VERIFIED":
+        reasons.append("Cryptographic authenticity was not established; advisory similarity cannot clear this document.")
 
     # 1. Check for corrupted/invalid/unreadable input
     if verification_status in ("INVALID_FILE", "VERIFICATION_UNAVAILABLE"):
@@ -160,7 +163,8 @@ def determine_review_routing(
         "reasons": reasons,
         "layout_assessment": layout,
         "layout_familiarity": layout.get("familiarity_score", 0.9),
-        "calibrated_confidence": (ocr_confidence / 100.0) if ocr_confidence is not None else 0.9,
+        "calibrated_confidence": None,
+        "calibration_status": "unavailable",
         "evidence_summary": {
             "field_status": field_status,
             "visual_status": visual_status,

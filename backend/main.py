@@ -759,20 +759,8 @@ def process_verification(data, kind, supplied_reference, user, file_name=None, f
         reg_tx = reg_dict.get("transaction_hash")
         block_number = reg_dict.get("block_number")
         reg_date = reg_dict.get("registered_at")
-        if reg_dict.get("metadata"):
-            try:
-                meta = json.loads(reg_dict["metadata"])
-                if isinstance(meta, dict):
-                    if not analysis["fields"].get("name") and meta.get("recipient_name"):
-                        analysis["fields"]["name"] = meta["recipient_name"]
-                    if not analysis["fields"].get("course") and meta.get("course"):
-                        analysis["fields"]["course"] = meta["course"]
-                    if not analysis["fields"].get("institution") and meta.get("institution_name"):
-                        analysis["fields"]["institution"] = meta["institution_name"]
-                    if not analysis["fields"].get("issue_date") and meta.get("issue_date"):
-                        analysis["fields"]["issue_date"] = meta["issue_date"]
-            except Exception:
-                pass
+        # Never fill missing observations from the expected record: doing so
+        # manufactures agreement when extraction fails or text was removed.
 
     if record:
         if not reg_date and record.get("registered_at"):
@@ -801,14 +789,22 @@ def process_verification(data, kind, supplied_reference, user, file_name=None, f
 
     # 1. Field-level change detection against authenticated reference
     field_comparison = compare_fields(
-        reg_dict if reg_dict else None,
+        reg_dict if reg_dict and record else None,
         analysis.get("fields", {}),
         extraction_method=analysis.get("extraction_method"),
-        ocr_confidence=analysis.get("ocr_confidence")
+        ocr_confidence=analysis.get("ocr_confidence"),
+        trusted_issuer=record.get("issuer") if record else None,
+        trusted_hash=record.get("file_hash") if record else None,
     )
 
     # 2. Visual tampering localization
     visual_analysis = analyze_visual_tampering(data, kind)
+    if hash_matches:
+        visual_analysis = {
+            "status": "not_required", "regions": [], "suspicious_regions": [],
+            "anomaly_score": None,
+            "accessible_description": "The file bytes exactly match the blockchain record. No visual alteration claim is made; authenticity still depends on issuer authorization and revocation checks.",
+        }
 
     # 3. Rescan & compression transformation advisory
     transformation_advisory = analyze_transformations(
@@ -1184,9 +1180,9 @@ def _register_document(data, kind, reference, user, metadata_override=None):
             msg = encode_defunct(hexstr=metadata_commitment)
             issuer_sig = Account.sign_message(msg, chain.keys[user["wallet"]]).signature.hex()
         except Exception:
-            issuer_sig = f"0xcommitment-{metadata_commitment[:32]}"
+            issuer_sig = None
     else:
-        issuer_sig = f"0xcommitment-{metadata_commitment[:32]}"
+        issuer_sig = None
 
     metadata_json = json.dumps(canonical_meta)
 

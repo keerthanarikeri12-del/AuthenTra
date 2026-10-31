@@ -99,6 +99,31 @@ def login_verifier(client):
     assert r.status_code == 200
     return r
 
+
+def test_missing_uploaded_name_is_not_copied_from_registered_metadata(v_env):
+    client, chain, _ = v_env
+    login_verifier(client)
+    reference = "AT-NO-BACKFILL"
+    original = make_test_pdf(reference, "Alice", "Physics")
+    submitted = make_test_pdf(reference, "", "Physics")
+    digest = hashlib.sha256(original).hexdigest()
+    chain.records[reference] = {
+        "file_hash": digest, "issuer": "0x0000000000000000000000000000000000000002",
+        "registered_at": 1700000000, "revoked": False,
+    }
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO registrations(reference,issuer_id,file_hash,transaction_hash,metadata) VALUES(?,2,?,'0xtest',?)",
+            (reference, digest, json.dumps({"recipient_name": "Alice", "course": "Physics"})),
+        )
+    response = client.post("/api/verify", files={"file": ("missing-name.pdf", submitted)})
+    assert response.status_code == 200
+    result = response.json()
+    assert not result["fields"].get("name")
+    assert result["hash_matches"] is False
+    assert result["field_analysis"]["status"] == "unavailable"
+    assert result["review_routing"]["requires_human_review"] is True
+
 # 1. EXACT REGISTERED FILE FROM AN AUTHORIZED ISSUER -> VERIFIED
 def test_exact_registered_file_verified(v_env):
     client, chain, _ = v_env
@@ -127,6 +152,9 @@ def test_exact_registered_file_verified(v_env):
     assert data["label"] == "Verified"
     assert "matches the registered hash" in data["message"]
     assert data["hash_matches"] is True
+    assert data["visual_tampering"]["status"] == "not_required"
+    assert data["visual_tampering"]["regions"] == []
+    assert data["review_routing"]["calibrated_confidence"] is None
     assert "Exact match" in data["hash_comparison"]
     assert data["issuer_authorized"] is True
     assert data["blockchain_record_status"] == "ACTIVE"

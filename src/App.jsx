@@ -1157,25 +1157,27 @@ function FieldComparisonView({ fa }) {
 }
 
 function VisualTamperingView({ vt, preview }) {
+  const [selectedRegion, setSelectedRegion] = useState(null);
+  const [loadedPreview, setLoadedPreview] = useState(null);
   if (!vt) return null;
-  const isUnavailable = !vt || vt.status?.toUpperCase() === 'UNAVAILABLE';
+  const legacyHeuristic = vt.status === 'clear' || vt.status === 'suspicious_regions_detected';
+  const isUnavailable = vt.status?.toUpperCase() === 'UNAVAILABLE' || vt.status === 'not_required' || legacyHeuristic;
   if (isUnavailable) {
     return (
       <div className="feature-section" style={{marginTop: '14px', padding: '12px 14px', border: '1px solid #e2e8f0', borderRadius: '7px', background: '#f8fafc'}}>
         <div style={{display: 'flex', alignItems: 'center', gap: '8px', color: '#64748b', marginBottom: '4px'}}>
           <Layers3 size={16}/>
           <span style={{fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px'}}>
-            Visual Tampering Localization Unavailable
+            {vt.status === 'not_required' ? 'Visual Analysis Not Required for Exact Byte Match' : 'Visual Tampering Localization Unavailable'}
           </span>
         </div>
         <p style={{fontSize: '12px', color: '#64748b', margin: 0}}>
-          {vt.message || vt.accessible_description || 'Visual tampering analysis is currently unavailable.'}
+          {legacyHeuristic ? 'This saved result used an unsupported compression heuristic. Its boxes and scores are not reliable tampering evidence. Run a new verification for the current analysis.' : (vt.message || vt.accessible_description || 'Visual tampering analysis is currently unavailable.')}
         </p>
       </div>
     );
   }
 
-  const [selectedRegion, setSelectedRegion] = useState(null);
   const regions = vt.regions || vt.suspicious_regions || [];
   const hasRegions = regions.length > 0;
   const isSuspicious = vt.status === 'suspicious_regions_detected' || hasRegions;
@@ -1211,16 +1213,19 @@ function VisualTamperingView({ vt, preview }) {
               border: '1px solid #cbd5e1',
               background: '#f8fafc',
               overflow: 'hidden',
-              minHeight: '260px'
+              minHeight: preview ? 0 : '260px',
+              aspectRatio: 'auto'
             }}
           >
             {preview ? (
               <img
                 src={preview}
+                onLoad={() => setLoadedPreview(preview)}
+                onError={() => setLoadedPreview(null)}
                 alt={`Certificate preview page ${vt.analyzed_page || vt.page || 1}`}
                 style={{
                   width: '100%',
-                  height: '100%',
+                  height: 'auto',
                   objectFit: 'contain',
                   display: 'block',
                   background: '#fff'
@@ -1231,12 +1236,12 @@ function VisualTamperingView({ vt, preview }) {
                 <FileText size={36} color="#94a3b8" style={{marginBottom: '8px'}}/>
                 <strong style={{fontSize: '12px', color: '#334155'}}>Document Page {vt.analyzed_page || vt.page || 1}</strong>
                 <span style={{fontSize: '11px', color: '#94a3b8', marginTop: '4px'}}>
-                  {hasRegions ? `${regions.length} suspicious bounding boxes mapped` : 'No anomalies detected'}
+                  Preview unavailable. Regions cannot be positioned without the analyzed page image.
                 </span>
               </div>
             )}
             <div className="visual-canvas-overlay" style={{position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none'}}>
-              {regions.map((reg, idx) => {
+              {preview && loadedPreview === preview && regions.map((reg, idx) => {
                 const [x, y, w, h] = reg.box || reg.bbox || [0, 0, 0, 0];
                 const isRef = reg.type === 'reference_difference';
                 const isSelected = selectedRegion === idx;
@@ -1246,10 +1251,10 @@ function VisualTamperingView({ vt, preview }) {
                     className={`visual-bbox ${isRef ? 'type-reference' : ''} ${isSelected ? 'selected' : ''}`}
                     style={{
                       position: 'absolute',
-                      left: `${Math.max(0, Math.min(96, x * 100))}%`,
-                      top: `${Math.max(0, Math.min(96, y * 100))}%`,
-                      width: `${Math.max(3, Math.min(100 - x * 100, w * 100))}%`,
-                      height: `${Math.max(3, Math.min(100 - y * 100, h * 100))}%`,
+                      left: `${Math.max(0, Math.min(100, x * 100))}%`,
+                      top: `${Math.max(0, Math.min(100, y * 100))}%`,
+                      width: `${Math.max(0, Math.min(100 - x * 100, w * 100))}%`,
+                      height: `${Math.max(0, Math.min(100 - y * 100, h * 100))}%`,
                       pointerEvents: 'auto',
                       cursor: 'pointer',
                       border: isSelected ? '3px solid #b91c1c' : isRef ? '2px solid #2563eb' : '2px solid #ef4444',
@@ -1264,7 +1269,7 @@ function VisualTamperingView({ vt, preview }) {
                   >
                     <span style={{
                       position: 'absolute',
-                      top: '-15px',
+                      top: '0',
                       left: '0',
                       background: isRef ? '#2563eb' : '#dc2626',
                       color: '#fff',
@@ -1295,10 +1300,10 @@ function VisualTamperingView({ vt, preview }) {
               <div style={{padding: '8px 10px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '6px', marginBottom: '8px'}}>
                 <div style={{display: 'flex', alignItems: 'center', gap: '6px', color: '#991b1b', marginBottom: '2px'}}>
                   <AlertTriangle size={15}/>
-                  <strong style={{fontSize: '12px'}}>{regions.length} Suspicious Region{regions.length === 1 ? '' : 's'} Identified</strong>
+                  <strong style={{fontSize: '12px'}}>{regions.length} Pixel Difference Region{regions.length === 1 ? '' : 's'}</strong>
                 </div>
                 <p style={{fontSize: '11px', color: '#7f1d1d', margin: 0}}>
-                  Error Level Analysis detected localized compression outliers. Highlights on document preview indicate potential spliced text or copied patches.
+                  Differences from the supplied reference are not proof of tampering. Alignment, scanning, and compression can also change pixels.
                 </p>
               </div>
 
@@ -1306,7 +1311,7 @@ function VisualTamperingView({ vt, preview }) {
                 {regions.map((reg, idx) => {
                   const isSelected = selectedRegion === idx;
                   const isRef = reg.type === 'reference_difference';
-                  const score = reg.confidence ?? reg.raw_score ?? reg.score;
+                  const score = reg.confidence;
                   const box = reg.box || reg.bbox || [];
                   return (
                     <div
@@ -1342,7 +1347,7 @@ function VisualTamperingView({ vt, preview }) {
               <CheckCircle2 size={24} color="#15803d" style={{margin: '0 auto 6px'}}/>
               <strong style={{display: 'block', fontSize: '12px', color: '#14532d'}}>No Localized Visual Discontinuities Detected</strong>
               <p style={{fontSize: '11px', margin: '4px 0 0', color: '#166534'}}>
-                Error level analysis and gradient checks found no localized patch manipulation anomalies exceeding threshold.
+                No pixel differences exceeded the threshold. This does not rule out edits; no trained forensic model was run.
               </p>
             </div>
           )}
@@ -1374,7 +1379,7 @@ function TransformationAdvisoryView({ ta }) {
   const outcomeLabels = {
     MATCH_CONFIRMED: 'Exact Byte Match (Original Document)',
     EXACT_MATCH: 'Exact Byte Match (Original Document)',
-    FIELDS_AGREE_RESAVE_OR_REEXPORT: 'Fields Agree; Differences Consistent with Rescan or Re-Export',
+    FIELDS_AGREE_RESAVE_OR_REEXPORT: 'Registered Fields Agree; Cause Unknown',
     CONTENT_DIFFERENCES_DETECTED: 'Content Differences Detected (Text Modification)',
     MIXED_EVIDENCE_REVIEW_REQUIRED: 'Mixed Evidence; Human Review Required',
     INSUFFICIENT_EVIDENCE: 'Insufficient Evidence to Assess Transformation',
@@ -1384,7 +1389,7 @@ function TransformationAdvisoryView({ ta }) {
   const outcomeColors = {
     MATCH_CONFIRMED: { border: '#059669', bg: '#ecfdf5', text: '#065f46' },
     EXACT_MATCH: { border: '#059669', bg: '#ecfdf5', text: '#065f46' },
-    FIELDS_AGREE_RESAVE_OR_REEXPORT: { border: '#059669', bg: '#ecfdf5', text: '#065f46' },
+    FIELDS_AGREE_RESAVE_OR_REEXPORT: { border: '#d97706', bg: '#fffbeb', text: '#92400e' },
     CONTENT_DIFFERENCES_DETECTED: { border: '#dc2626', bg: '#fef2f2', text: '#991b1b' },
     MIXED_EVIDENCE_REVIEW_REQUIRED: { border: '#d97706', bg: '#fffbeb', text: '#92400e' },
     INSUFFICIENT_EVIDENCE: { border: '#64748b', bg: '#f8fafc', text: '#334155' },
@@ -1398,7 +1403,7 @@ function TransformationAdvisoryView({ ta }) {
   const blockiness = ta.image_quality?.blockiness ?? ta.evidence?.image_quality?.blockiness;
   const skew = ta.skew_angle ?? ta.evidence?.estimated_skew_degrees;
   const ocr = ta.ocr_reliability ?? ta.evidence?.ocr_confidence;
-  const visualAnomaly = ta.visual_anomaly_score != null ? Math.round(ta.visual_anomaly_score * 100) + '%' : (ta.evidence?.visual_anomalies_detected ? 'Detected' : 'None');
+  const visualAnomaly = ta.visual_anomaly_score != null ? Math.round(ta.visual_anomaly_score * 100) + '%' : 'Not assessed';
 
   const transTypeLabels = {
     none: 'Original Digital File',
@@ -1463,7 +1468,7 @@ function TransformationAdvisoryView({ ta }) {
         </div>
         <div className="trans-metric">
           <small>Estimated Skew</small>
-          <strong>{skew != null ? `${Number(skew).toFixed(1)}°` : '0.0°'}</strong>
+          <strong>{skew != null ? `${Number(skew).toFixed(1)}°` : '—'}</strong>
           <span style={{fontSize: '10px', color: skew != null && Math.abs(skew) > 0.8 ? '#b45309' : '#15803d'}}>
             {skew != null ? (Math.abs(skew) > 0.8 ? 'Rotated/Skewed' : 'Upright') : ''}
           </span>
@@ -1505,7 +1510,7 @@ function ReviewRoutingView({ rr, reference, user }) {
 
   const outcome = rr.routing_outcome || rr.outcome || 'COMPLETED_NO_REVIEW';
   const familiarity = rr.layout_familiarity ?? rr.layout_assessment?.familiarity_score;
-  const confidence = rr.calibrated_confidence ?? (rr.evidence_summary?.ocr_confidence != null ? rr.evidence_summary.ocr_confidence / 100 : null);
+  const confidence = rr.calibration_status === 'calibrated' ? rr.calibrated_confidence : null;
 
   const outcomeLabels = {
     COMPLETED_NO_REVIEW: 'Analysis Completed Without Additional Review',
@@ -1583,7 +1588,7 @@ function ReviewRoutingView({ rr, reference, user }) {
             </span>
           )}
           {familiarity != null && (
-            <span>Layout Familiarity: <strong>{Math.round(familiarity * 100)}%</strong> {rr.layout_assessment?.label ? `(${rr.layout_assessment.label})` : ''}</span>
+            <span>Layout keyword heuristic (uncalibrated): <strong>{familiarity}</strong></span>
           )}
           {confidence != null && (
             <span>Calibrated Confidence: <strong>{Math.round(confidence * 100)}%</strong></span>

@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional, Tuple
 
 FIELD_SCHEMA_VERSION = "2026.1"
 
-CRITICAL_FIELDS = ["recipient_name", "certificate_reference", "course", "issue_date"]
+CRITICAL_FIELDS = ["recipient_name", "certificate_reference", "course", "issue_date", "grade"]
 ALL_FIELDS = ["recipient_name", "institution_name", "course", "certificate_reference", "issue_date", "grade"]
 
 FIELD_ALIASES = {
@@ -254,7 +254,8 @@ def compare_single_field(field_name: str, registered_val: Optional[str], observe
 
 
 def compare_fields(registered_record: Optional[Dict[str, Any]], extracted_fields: Dict[str, Any],
-                   extraction_method: Optional[str] = None, ocr_confidence: Optional[float] = None) -> Dict[str, Any]:
+                   extraction_method: Optional[str] = None, ocr_confidence: Optional[float] = None,
+                   trusted_issuer: Optional[str] = None, trusted_hash: Optional[str] = None) -> Dict[str, Any]:
     """Execute conservative, deterministic field-level comparison against authenticated reference."""
     if not registered_record or not registered_record.get("confirmed_metadata"):
         return {
@@ -275,6 +276,8 @@ def compare_fields(registered_record: Optional[Dict[str, Any]], extracted_fields
 
     try:
         confirmed = json.loads(registered_record["confirmed_metadata"])
+        if not isinstance(confirmed, dict):
+            raise ValueError("Metadata must be an object")
     except (TypeError, ValueError):
         return {
             "status": "unavailable",
@@ -294,7 +297,31 @@ def compare_fields(registered_record: Optional[Dict[str, Any]], extracted_fields
         expected = compute_metadata_commitment(confirmed, reference, file_hash)
         commitment_verified = (expected.lower() == commitment_stored.lower())
 
-    ambiguous = extracted_fields.get("ambiguous_fields", [])
+    signature_verified = False
+    if trusted_issuer is not None:
+        try:
+            from eth_account import Account
+            from eth_account.messages import encode_defunct
+            signer = Account.recover_message(
+                encode_defunct(hexstr=commitment_stored),
+                signature=registered_record.get("issuer_signature"),
+            )
+            signature_verified = signer.lower() == trusted_issuer.lower()
+            commitment_verified = commitment_verified and signature_verified and (
+                file_hash.lower().removeprefix("0x") == (trusted_hash or "").lower().removeprefix("0x")
+            )
+        except Exception:
+            commitment_verified = False
+
+    if not commitment_verified:
+        return {
+            "status": "unavailable", "schema_version": FIELD_SCHEMA_VERSION,
+            "explanation": "Reference metadata commitment, issuer signature, or blockchain binding is missing or invalid; comparison cannot be trusted.",
+            "fields": {}, "summary": {}, "commitment_verified": False,
+            "critical_field_changed": False, "all_fields_match": False,
+        }
+
+    ambiguous = [canonicalize_field_key(f) for f in extracted_fields.get("ambiguous_fields", [])]
     unreadable = extraction_method == "unavailable" or (ocr_confidence is not None and ocr_confidence < 30)
 
     canonical_observed = canonical_metadata_dict(extracted_fields)
@@ -327,7 +354,8 @@ def compare_fields(registered_record: Optional[Dict[str, Any]], extracted_fields
     # Determine overall status
     critical_changed = any(field_results[f]["status"] == "changed" for f in CRITICAL_FIELDS if field_results[f]["registered_value"])
     any_changed = counts["changed"] > 0
-    all_matched = counts["changed"] == 0 and counts["matched"] > 0 and counts["missing"] == 0 and counts["ambiguous"] == 0 and counts["unreadable"] == 0
+    expected_results = [r for r in field_results.values() if r["registered_value"]]
+    all_matched = bool(expected_results) and all(r["status"] == "matched" for r in expected_results)
 
     if critical_changed:
         overall_status = "CRITICAL_FIELDS_CHANGED"
@@ -338,9 +366,9 @@ def compare_fields(registered_record: Optional[Dict[str, Any]], extracted_fields
     elif counts["ambiguous"] > 0 or counts["unreadable"] > 0:
         overall_status = "INDETERMINATE"
         summary_explanation = "Document fields contain ambiguous or low-confidence unreadable values. Human review required."
-    elif counts["matched"] > 0:
+    elif all_matched:
         overall_status = "ALL_MATCHED"
-        summary_explanation = "All extracted fields match authenticated reference values confirmed by the issuing institution."
+        summary_explanation = "All registered fields were extracted and match the stored reference. This does not establish authenticity of unregistered content."
     else:
         overall_status = "INSUFFICIENT_DATA"
         summary_explanation = "No fields could be reliably extracted or compared against the reference record."
@@ -359,6 +387,8 @@ def compare_fields(registered_record: Optional[Dict[str, Any]], extracted_fields
         "summary": counts,
         "fields": field_results,
         "commitment_verified": commitment_verified,
+        "reference_trust": "issuer_signature_and_chain_hash" if signature_verified else "database_commitment_integrity_only",
+        "signature_verified": signature_verified,
         "issuer_signature": registered_record.get("issuer_signature"),
         "committed_at": registered_record.get("committed_at"),
     }
