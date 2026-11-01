@@ -67,11 +67,12 @@ class UploadTransport:
             finally:
                 self.active -= 1
         except HTTPException as exc:
-            try:
-                while True:
-                    msg = await receive()
-                    if msg['type'] == 'http.disconnect' or not msg.get('more_body', False):
-                        break
-            except Exception:
-                pass
+            if 'message' in locals() and message.get('more_body', False):
+                try:
+                    while True:
+                        msg = await receive()
+                        if msg['type'] == 'http.disconnect' or not msg.get('more_body', False):
+                            break
+                except Exception:
+                    pass
             await JSONResponse({'detail': exc.detail}, status_code=exc.status_code, headers={'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff'})(scope, receive, send)

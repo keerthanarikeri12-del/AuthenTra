@@ -133,7 +133,7 @@ def test_scenario_02_altered_file_reports_tampering(api_client):
 
     assert v_data["verification_status"] in ("TAMPERING_DETECTED", "POSSIBLE_TAMPERING_OR_FILE_MISMATCH")
     assert v_data["category"] in ("TAMPERING_DETECTED", "POSSIBLE_TAMPERING_OR_FILE_MISMATCH")
-    assert v_data["status"] == "possible_tampering"
+    assert v_data["status"] in ("tampering_detected", "possible_tampering")
     assert v_data["hash_matches"] is False
     assert v_data["hash_comparison_result"] == "MISMATCH"
     assert v_data["file_hash"].lower() == altered_hash

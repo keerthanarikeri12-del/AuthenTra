@@ -1017,9 +1017,10 @@ def test_scenario_11_multiple_possible_registered_matches_manual_review(v_env):
     h2 = hashlib.sha256(c2).hexdigest()
     chain.records["AT-DUP-002"] = {"file_hash": h2, "issuer": "0x0000000000000000000000000000000000000002", "registered_at": 1700000000, "revoked": False}
 
+    meta = json.dumps({"recipient_name": "Ian Duplicate", "course": "Statistics", "issue_date": "2026-03-20", "institution_name": "Meridian Institute of Technology"})
     with connect() as conn:
-        conn.execute("INSERT INTO registrations(reference, file_hash, issuer_id, transaction_hash, metadata) VALUES(?,?,?,?,'{}')", ("AT-DUP-001", h1, 2, "0xdup1"))
-        conn.execute("INSERT INTO registrations(reference, file_hash, issuer_id, transaction_hash, metadata) VALUES(?,?,?,?,'{}')", ("AT-DUP-002", h2, 2, "0xdup2"))
+        conn.execute("INSERT INTO registrations(reference, file_hash, issuer_id, transaction_hash, confirmed_metadata) VALUES(?,?,?,? ,?)", ("AT-DUP-001", h1, 2, "0xdup1", meta))
+        conn.execute("INSERT INTO registrations(reference, file_hash, issuer_id, transaction_hash, confirmed_metadata) VALUES(?,?,?,? ,?)", ("AT-DUP-002", h2, 2, "0xdup2", meta))
 
     ambig_pdf = make_test_pdf(reference="", name="Ian Duplicate", course="Statistics", date_str="2026-03-20")
     res = client.post(

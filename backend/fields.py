@@ -358,6 +358,7 @@ def compare_fields(registered_record: Optional[Dict[str, Any]], extracted_fields
     file_hash = registered_record.get("file_hash", "")
     reference = registered_record.get("reference", "")
     commitment_verified = False
+    signature_verified = False
     if commitment_stored:
         expected = compute_metadata_commitment(confirmed, reference, file_hash)
         commitment_verified = (expected.lower() == commitment_stored.lower())

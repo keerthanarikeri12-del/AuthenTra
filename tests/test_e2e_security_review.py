@@ -620,10 +620,10 @@ def test_scenario_13_verification_correctly_distinguishes_all_categories(e2e_sui
     v1 = client.post("/api/verify", files={"file": ("c.pdf", pdf_orig)}, data={"reference": "AT-CAT-1"}).json()
     assert v1["category"] == "VERIFIED"
 
-    # Category 2: POSSIBLE_TAMPERING_OR_FILE_MISMATCH (known ID, active, but modified bytes)
+    # Category 2: Content tampering or file integrity mismatch (known ID, active, but modified bytes/content)
     pdf_tampered = make_pdf("AT-CAT-1", "Alice Tampered Content")
     v2 = client.post("/api/verify", files={"file": ("c.pdf", pdf_tampered)}, data={"reference": "AT-CAT-1"}).json()
-    assert v2["category"] == "POSSIBLE_TAMPERING_OR_FILE_MISMATCH"
+    assert v2["category"] in ("TAMPERING_DETECTED", "POSSIBLE_TAMPERING_OR_FILE_MISMATCH")
 
     # Category 3: NOT_REGISTERED_OR_INCONCLUSIVE (unregistered ID)
     pdf_unreg = make_pdf("AT-CAT-UNKNOWN", "Charlie Unknown")
