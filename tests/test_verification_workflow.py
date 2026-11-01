@@ -412,3 +412,195 @@ def test_verification_history_scoped_to_user(v_env):
     # Fetch history as institution: MUST NOT see verifier's check!
     h2 = client.get("/api/history").json()
     assert not any(h["reference"] == "AT-HIST-001" for h in h2)
+
+# 11. EXACT HASH MATCH WITH CONFLICTING SUPPLIED REFERENCE
+def test_exact_hash_match_with_conflicting_supplied_reference(v_env):
+    client, chain, _ = v_env
+    login_verifier(client)
+
+    cert_bytes = make_test_pdf("AT-2026-BOUND", "Carol Danvers", "Aerospace Engineering")
+    digest = hashlib.sha256(cert_bytes).hexdigest()
+
+    chain.records["AT-2026-BOUND"] = {
+        "file_hash": digest,
+        "issuer": "0x0000000000000000000000000000000000000002",
+        "registered_at": 1700000000,
+        "revoked": False,
+    }
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO registrations(reference, file_hash, issuer_id, transaction_hash, registered_at) VALUES(?,?,?,?,?)",
+            ("AT-2026-BOUND", digest, 2, "0x1111", "2026-01-15T00:00:00Z")
+        )
+
+    res = client.post(
+        "/api/verify",
+        files={"file": ("cert.pdf", cert_bytes)},
+        data={"reference": "AT-2026-CONFLICTING"}
+    )
+    assert res.status_code == 200
+    data = res.json()
+
+    assert data["category"] == "VERIFIED"
+    assert data["hash_matches"] is True
+    assert data["hash_comparison_result"] == "MATCH"
+    assert data["reference"] == "AT-2026-BOUND"
+    assert any("conflicts with registered certificate ID" in w for w in data["warnings"])
+
+# 12. HASH MISMATCH WITHOUT SUFFICIENT EVIDENCE IS NOT TAMPERED
+def test_hash_mismatch_without_sufficient_evidence_not_tampered(v_env):
+    client, chain, _ = v_env
+    login_verifier(client)
+
+    orig_bytes = make_test_pdf("AT-2026-NOEVID", "David Copper", "Stage Magic")
+    orig_hash = hashlib.sha256(orig_bytes).hexdigest()
+
+    chain.records["AT-2026-NOEVID"] = {
+        "file_hash": orig_hash,
+        "issuer": "0x0000000000000000000000000000000000000002",
+        "registered_at": 1700000000,
+        "revoked": False,
+    }
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO registrations(reference, file_hash, issuer_id, transaction_hash, registered_at) VALUES(?,?,?,?,?)",
+            ("AT-2026-NOEVID", orig_hash, 2, "0x2222", "2026-01-15T00:00:00Z")
+        )
+
+    modified_bytes = make_test_pdf("AT-2026-NOEVID", "David Copper", "Stage Magic", extra_text="Re-saved copy")
+    mod_hash = hashlib.sha256(modified_bytes).hexdigest()
+    assert mod_hash != orig_hash
+
+    res = client.post("/api/verify", files={"file": ("cert.pdf", modified_bytes)})
+    assert res.status_code == 200
+    data = res.json()
+
+    assert data["category"] == "POSSIBLE_TAMPERING_OR_FILE_MISMATCH"
+    assert data["verification_status"] == "POSSIBLE_TAMPERING_OR_FILE_MISMATCH"
+    assert data["hash_matches"] is False
+    assert data["hash_comparison_result"] == "MISMATCH"
+    assert "file bytes differ" in data["hash_comparison"].lower()
+    assert "tampered" not in data["verification_status"].lower()
+    assert "re-saving" in data["message"].lower() or "re-exporting" in data["message"].lower() or "compression" in data["message"].lower()
+
+# 13. HASH MISMATCH WITH VERIFIED METADATA COMMITMENT CONFIRMS TAMPERING
+def test_hash_mismatch_with_verified_metadata_commitment_confirms_tampering(v_env):
+    from eth_account import Account
+    from eth_account.messages import encode_defunct
+    from backend.fields import compute_metadata_commitment
+
+    client, chain, _ = v_env
+    login_verifier(client)
+
+    signer = Account.from_key("02" * 32)
+    chain.approved_issuers[signer.address.lower()] = True
+
+    orig_pdf = make_test_pdf("AT-2026-TAMPER", "Alice Smith", "Data Science")
+    orig_hash = hashlib.sha256(orig_pdf).hexdigest()
+
+    confirmed = {"recipient_name": "Alice Smith", "course": "Data Science", "reference": "AT-2026-TAMPER"}
+    comm = compute_metadata_commitment(confirmed, "AT-2026-TAMPER", orig_hash)
+    sig = Account.sign_message(encode_defunct(hexstr=comm), signer.key).signature.hex()
+
+    chain.records["AT-2026-TAMPER"] = {
+        "file_hash": orig_hash,
+        "issuer": signer.address,
+        "registered_at": 1700000000,
+        "revoked": False,
+    }
+    with connect() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO users(email, name, password, role, wallet, approval_status) VALUES(?,?,?,?,?,?)",
+            ("trusted_signer@authentra.demo", "Trusted Signer", "hash", "institution", signer.address, "APPROVED")
+        )
+        user_row = conn.execute("SELECT id FROM users WHERE lower(wallet)=lower(?)", (signer.address.lower(),)).fetchone()
+        issuer_user_id = user_row["id"]
+        conn.execute(
+            "INSERT INTO registrations(reference, file_hash, issuer_id, transaction_hash, confirmed_metadata, metadata_commitment, issuer_signature, registered_at) VALUES(?,?,?,?,?,?,?,?)",
+            ("AT-2026-TAMPER", orig_hash, issuer_user_id, "0x3333", json.dumps(confirmed), comm, sig, "2026-01-15T00:00:00Z")
+        )
+
+    # Verifier uploads tampered certificate with changed name
+    tampered_pdf = make_test_pdf("AT-2026-TAMPER", "Bob Smith", "Data Science")
+    res = client.post("/api/verify", files={"file": ("tampered.pdf", tampered_pdf)})
+    assert res.status_code == 200
+    data = res.json()
+
+    assert data["verification_status"] == "TAMPERING_DETECTED"
+    assert data["field_analysis"]["commitment_verified"] is True
+    assert data["field_analysis"]["critical_field_changed"] is True
+    assert "unauthorized change" in data["message"].lower() or "protected certificate data differs" in data["message"].lower()
+
+# 14. CONFLICTING SUPPLIED AND EXTRACTED REFERENCE RETURNS INCONCLUSIVE
+def test_conflicting_supplied_and_extracted_reference_returns_inconclusive(v_env):
+    client, chain, _ = v_env
+    login_verifier(client)
+
+    cert_bytes = make_test_pdf("AT-2026-EXTRACTED", "Eve Adams", "Cybersecurity")
+
+    res = client.post(
+        "/api/verify",
+        files={"file": ("cert.pdf", cert_bytes)},
+        data={"reference": "AT-2026-DIFFERENT"}
+    )
+    assert res.status_code == 200
+    data = res.json()
+
+    assert data["category"] == "NOT_REGISTERED_OR_INCONCLUSIVE"
+    assert data["verification_status"] == "INCONCLUSIVE"
+    assert data["reference"] is None
+    assert data["hash_matches"] is None
+    assert any("conflicting certificate identifiers" in w.lower() for w in data["warnings"])
+
+# 15. MISSING REGISTRATION TREATED AS INCONCLUSIVE NOT TAMPERING
+def test_missing_registration_treated_as_inconclusive_not_tampering(v_env):
+    client, chain, _ = v_env
+    login_verifier(client)
+
+    cert_bytes = make_test_pdf("AT-NOT-FOUND-999", "Unknown Student", "Ancient History")
+    res = client.post("/api/verify", files={"file": ("cert.pdf", cert_bytes)})
+    assert res.status_code == 200
+    data = res.json()
+
+    assert data["category"] == "NOT_REGISTERED_OR_INCONCLUSIVE"
+    assert data["verification_status"] in ("NOT_REGISTERED", "INCONCLUSIVE")
+    assert data["hash_matches"] is None
+    assert "tamper" not in data["message"].lower()
+    assert "does not prove that the document is forged" in data["message"].lower()
+    assert "no registration exists" in data["message"].lower()
+
+# 16. USER FACING HASH COMPARISON WORDING
+def test_user_facing_hash_comparison_wording(v_env):
+    client, chain, _ = v_env
+    login_verifier(client)
+
+    # 1. Exact match wording
+    exact_pdf = make_test_pdf("AT-2026-WORDING", "Frank Miller", "Graphic Arts")
+    exact_hash = hashlib.sha256(exact_pdf).hexdigest()
+    chain.records["AT-2026-WORDING"] = {
+        "file_hash": exact_hash,
+        "issuer": "0x0000000000000000000000000000000000000002",
+        "registered_at": 1700000000,
+        "revoked": False,
+    }
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO registrations(reference, file_hash, issuer_id, transaction_hash, registered_at) VALUES(?,?,?,?,?)",
+            ("AT-2026-WORDING", exact_hash, 2, "0x4444", "2026-01-15T00:00:00Z")
+        )
+
+    res_exact = client.post("/api/verify", files={"file": ("cert.pdf", exact_pdf)})
+    assert res_exact.json()["hash_comparison"] == "Exact match between uploaded file hash and registered on-chain hash"
+    assert res_exact.json()["hash_comparison_result"] == "MATCH"
+
+    # 2. Mismatch wording (file bytes differ, not claimed tampered)
+    resaved_pdf = make_test_pdf("AT-2026-WORDING", "Frank Miller", "Graphic Arts", extra_text="Re-saved copy")
+    res_mismatch = client.post("/api/verify", files={"file": ("cert.pdf", resaved_pdf)})
+    assert res_mismatch.json()["hash_comparison"] == "Uploaded file hash differs from registered on-chain hash (file bytes differ)"
+    assert res_mismatch.json()["hash_comparison_result"] == "MISMATCH"
+
+    # 3. Not registered wording
+    unreg_pdf = make_test_pdf("AT-2026-UNREG", "Frank Miller", "Graphic Arts")
+    res_unreg = client.post("/api/verify", files={"file": ("cert.pdf", unreg_pdf)})
+    assert res_unreg.json()["hash_comparison"] == "No registered hash available for comparison"
+    assert res_unreg.json()["hash_comparison_result"] == "NOT_COMPARED"

@@ -8,7 +8,7 @@ import sqlite3
 import time
 import threading
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Literal
 import jwt
@@ -35,9 +35,9 @@ COOKIE = "authentra_session"
 LABELS = {
     "verified": "Verified",
     "VERIFIED": "Verified",
-    "possible_tampering": "Possible Tampering",
+    "possible_tampering": "Possible Tampering or File Mismatch",
     "tampering_detected": "Tampering Detected",
-    "TAMPERING_DETECTED": "Possible Tampering or File Mismatch",
+    "TAMPERING_DETECTED": "Tampering Detected",
     "POSSIBLE_TAMPERING_OR_FILE_MISMATCH": "Possible Tampering or File Mismatch",
     "not_registered": "Not Registered",
     "NOT_REGISTERED": "Not Registered",
@@ -46,6 +46,8 @@ LABELS = {
     "NOT_REGISTERED_OR_INCONCLUSIVE": "Not Registered or Inconclusive",
     "revoked": "Revoked",
     "REVOKED": "Revoked",
+    "expired": "Expired",
+    "EXPIRED": "Expired",
     "not_verified": "Issuer Not Authorized",
     "ISSUER_NOT_AUTHORIZED": "Issuer Not Authorized",
     "unable_to_authenticate": "Verification Unavailable",
@@ -572,21 +574,9 @@ def process_verification(data, kind, supplied_reference, user, file_name=None, f
 
         # 2. If found directly by file hash on-chain
         if record is not None:
-            if supplied_reference:
-                try:
-                    reference = normalize_reference(supplied_reference)
-                except ValueError:
-                    reference = None
-            elif extracted:
-                try:
-                    reference = normalize_reference(extracted)
-                except ValueError:
-                    reference = None
-
+            bound_reference = None
             with connect() as conn:
                 reg_row = conn.execute("SELECT * FROM registrations WHERE lower(file_hash)=lower(?)", (digest,)).fetchone()
-                if not reg_row and reference:
-                    reg_row = conn.execute("SELECT * FROM registrations WHERE reference=?", (reference,)).fetchone()
                 if not reg_row and record.get("reference_hash"):
                     for r in conn.execute("SELECT * FROM registrations").fetchall():
                         try:
@@ -595,19 +585,71 @@ def process_verification(data, kind, supplied_reference, user, file_name=None, f
                                 break
                         except Exception:
                             continue
-            if not reference and reg_row:
-                reference = reg_row["reference"]
+            reg_dict = dict(reg_row) if reg_row else {}
+            if reg_dict.get("reference"):
+                bound_reference = reg_dict["reference"]
+            elif record.get("reference"):
+                bound_reference = record["reference"]
+
+            norm_supplied = None
+            if supplied_reference:
+                try:
+                    norm_supplied = normalize_reference(supplied_reference)
+                except ValueError:
+                    norm_supplied = supplied_reference.strip().upper() if supplied_reference.strip() else None
+
+            norm_extracted = None
+            if extracted:
+                try:
+                    norm_extracted = normalize_reference(extracted)
+                except ValueError:
+                    norm_extracted = extracted.strip().upper() if extracted.strip() else None
+
+            if bound_reference:
+                reference = bound_reference
+                if norm_supplied and norm_supplied != bound_reference:
+                    analysis["warnings"].append(
+                        f"Supplied certificate ID '{norm_supplied}' conflicts with registered certificate ID '{bound_reference}' bound to this file hash. The bound ID was used."
+                    )
+                if norm_extracted and norm_extracted != bound_reference:
+                    analysis["warnings"].append(
+                        f"Extracted certificate ID '{norm_extracted}' differs from registered certificate ID '{bound_reference}' bound to this file hash."
+                    )
+            else:
+                reference = norm_supplied or norm_extracted
+
+            if not reg_dict and reference:
+                with connect() as conn:
+                    reg_row = conn.execute("SELECT * FROM registrations WHERE reference=?", (reference,)).fetchone()
+                    reg_dict = dict(reg_row) if reg_row else {}
 
             try:
                 authorized = chain.approved(record["issuer"])
             except Exception:
                 authorized = False
 
+            is_expired = False
+            if reg_dict.get("confirmed_metadata"):
+                try:
+                    conf_meta = json.loads(reg_dict["confirmed_metadata"])
+                    exp_str = conf_meta.get("expiry_date") or conf_meta.get("expiration_date") or conf_meta.get("valid_until")
+                    if exp_str:
+                        exp_d = date.fromisoformat(str(exp_str).strip()[:10])
+                        if exp_d < date.today():
+                            is_expired = True
+                except Exception:
+                    pass
+
             if record["revoked"]:
                 status = "revoked"
                 verification_status = "REVOKED"
                 category = "REVOKED"
                 message = "The issuer or platform owner has revoked this certificate."
+            elif is_expired:
+                status = "expired"
+                verification_status = "EXPIRED"
+                category = "EXPIRED"
+                message = "This credential has passed its validity period. Contact the issuing institution to request renewal or re-certification."
             elif not authorized:
                 status = "not_verified"
                 verification_status = "ISSUER_NOT_AUTHORIZED"
@@ -630,35 +672,131 @@ def process_verification(data, kind, supplied_reference, user, file_name=None, f
             hash_comparison_result = "MATCH"
 
         else:
-            # 3. Not found by exact hash. Check if reference is available to detect tampering or unregistered status.
-            ref_candidate = supplied_reference or extracted or ""
-            ref_norm = None
-            if ref_candidate:
+            # 3. Not found by exact hash.
+            # Locate reference record via certificate ID or unambiguous trusted issuer-signed metadata match.
+            # If evidence is missing, ambiguous, or conflicting, return Inconclusive rather than guessing.
+            norm_supplied = None
+            if supplied_reference:
                 try:
-                    ref_norm = normalize_reference(ref_candidate)
+                    norm_supplied = normalize_reference(supplied_reference)
                 except ValueError:
-                    ref_norm = None
+                    norm_supplied = supplied_reference.strip().upper() if supplied_reference.strip() else None
 
-            if ref_norm:
-                reference = ref_norm
-                if supplied_reference and extracted and reference != extracted.upper():
-                    analysis["warnings"].append("The entered certificate ID differs from the extracted ID. This result applies to the entered ID.")
+            norm_extracted = None
+            if extracted:
+                try:
+                    norm_extracted = normalize_reference(extracted)
+                except ValueError:
+                    norm_extracted = extracted.strip().upper() if extracted.strip() else None
+
+            is_extracted_ambiguous = "reference" in analysis.get("fields", {}).get("ambiguous_fields", [])
+
+            reference_candidate = None
+            reference_conflict = False
+
+            if norm_supplied and norm_extracted:
+                if norm_supplied != norm_extracted:
+                    reference_conflict = True
+                    analysis["warnings"].append(
+                        f"Conflicting certificate identifiers: supplied ID '{norm_supplied}' conflicts with document ID '{norm_extracted}'."
+                    )
+                else:
+                    reference_candidate = norm_supplied
+            elif norm_supplied:
+                reference_candidate = norm_supplied
+            elif norm_extracted:
+                if is_extracted_ambiguous:
+                    analysis["warnings"].append("Ambiguous certificate reference detected in document text.")
+                else:
+                    reference_candidate = norm_extracted
+
+            # If no certificate ID was found from supplied or extracted, check for unambiguous trusted issuer-signed metadata match
+            if not reference_candidate and not reference_conflict and not is_extracted_ambiguous:
+                ext_fields = analysis.get("fields", {})
+                recip_name = ext_fields.get("name")
+                course_name = ext_fields.get("course")
+                date_str = ext_fields.get("issue_date")
+                if recip_name and course_name:
+                    with connect() as conn:
+                        candidate_rows = conn.execute(
+                            "SELECT * FROM registrations WHERE confirmed_metadata IS NOT NULL AND metadata_commitment IS NOT NULL"
+                        ).fetchall()
+                    matches = []
+                    for r_row in candidate_rows:
+                        try:
+                            conf = json.loads(r_row["confirmed_metadata"])
+                            if not isinstance(conf, dict):
+                                continue
+                            expected_comm = compute_metadata_commitment(conf, r_row["reference"], r_row["file_hash"])
+                            if expected_comm.lower() != (r_row["metadata_commitment"] or "").lower():
+                                continue
+                            c_dict = canonical_metadata_dict(conf)
+                            from .fields import normalize_recipient_name, normalize_course, normalize_date
+                            if normalize_recipient_name(recip_name) == normalize_recipient_name(c_dict.get("recipient_name")):
+                                if normalize_course(course_name) == normalize_course(c_dict.get("course")):
+                                    if not date_str or normalize_date(date_str) == normalize_date(c_dict.get("issue_date")):
+                                        matches.append(r_row)
+                        except Exception:
+                            continue
+                    if len(matches) == 1:
+                        reference_candidate = matches[0]["reference"]
+                        analysis["warnings"].append(
+                            f"Certificate reference located via unambiguous trusted issuer-signed metadata match for '{reference_candidate}'."
+                        )
+                    elif len(matches) > 1:
+                        analysis["warnings"].append("Multiple matching issuer-signed records found for extracted metadata; reference match is ambiguous.")
+
+            if reference_conflict or is_extracted_ambiguous or not reference_candidate:
+                reference = None
+                status = "inconclusive"
+                verification_status = "INCONCLUSIVE"
+                category = "NOT_REGISTERED_OR_INCONCLUSIVE"
+                if reference_conflict:
+                    message = "Conflicting certificate identifiers were detected between the supplied ID and the document content. Verification is inconclusive."
+                elif is_extracted_ambiguous:
+                    message = "Multiple ambiguous certificate references were detected in the document. Verification is inconclusive."
+                else:
+                    message = "A readable certificate reference could not be detected. Confirm the reference from the issuing institution and try again."
+                checks = {"reference_found": False, "hash_matches": None, "issuer_approved": None, "active": None}
+                hash_matches = None
+                hash_comparison = "No registered hash available for comparison"
+                hash_comparison_result = "NOT_COMPARED"
+            else:
+                reference = reference_candidate
                 ref_record = chain.lookup(reference)
                 if ref_record is not None:
                     record = ref_record
                     record_source = "reference"
                     with connect() as conn:
                         reg_row = conn.execute("SELECT * FROM registrations WHERE reference=?", (reference,)).fetchone()
+                        reg_dict = dict(reg_row) if reg_row else {}
                     try:
                         authorized = chain.approved(record["issuer"])
                     except Exception:
                         authorized = False
+
+                    is_expired = False
+                    if reg_dict.get("confirmed_metadata"):
+                        try:
+                            conf_meta = json.loads(reg_dict["confirmed_metadata"])
+                            exp_str = conf_meta.get("expiry_date") or conf_meta.get("expiration_date") or conf_meta.get("valid_until")
+                            if exp_str:
+                                exp_d = date.fromisoformat(str(exp_str).strip()[:10])
+                                if exp_d < date.today():
+                                    is_expired = True
+                        except Exception:
+                            pass
 
                     if record["revoked"]:
                         status = "revoked"
                         verification_status = "REVOKED"
                         category = "REVOKED"
                         message = "The issuer or platform owner has revoked this certificate."
+                    elif is_expired:
+                        status = "expired"
+                        verification_status = "EXPIRED"
+                        category = "EXPIRED"
+                        message = "This credential has passed its validity period. Contact the issuing institution to request renewal or re-certification."
                     elif not authorized:
                         status = "not_verified"
                         verification_status = "ISSUER_NOT_AUTHORIZED"
@@ -680,7 +818,7 @@ def process_verification(data, kind, supplied_reference, user, file_name=None, f
                         hash_comparison_result = "MATCH"
                     else:
                         status = "possible_tampering"
-                        verification_status = "TAMPERING_DETECTED"
+                        verification_status = "POSSIBLE_TAMPERING_OR_FILE_MISMATCH"
                         category = "POSSIBLE_TAMPERING_OR_FILE_MISMATCH"
                         message = "This file differs from the registered original. Re-saving, re-exporting, compression, and rescanning also change file bytes. Verify the original issued file."
                         checks = {
@@ -690,7 +828,7 @@ def process_verification(data, kind, supplied_reference, user, file_name=None, f
                             "active": not record["revoked"]
                         }
                         hash_matches = False
-                        hash_comparison = "Uploaded file hash differs from registered on-chain hash (possible tampering, re-export, or rescan)"
+                        hash_comparison = "Uploaded file hash differs from registered on-chain hash (file bytes differ)"
                         hash_comparison_result = "MISMATCH"
                 else:
                     status = "not_registered"
@@ -701,16 +839,6 @@ def process_verification(data, kind, supplied_reference, user, file_name=None, f
                     hash_matches = None
                     hash_comparison = "No registered hash available for comparison"
                     hash_comparison_result = "NOT_COMPARED"
-            else:
-                reference = None
-                status = "inconclusive"
-                verification_status = "INCONCLUSIVE"
-                category = "NOT_REGISTERED_OR_INCONCLUSIVE"
-                message = "A readable certificate reference could not be detected. Confirm the reference from the issuing institution and try again."
-                checks = {"reference_found": False, "hash_matches": None, "issuer_approved": None, "active": None}
-                hash_matches = None
-                hash_comparison = "No registered hash available for comparison"
-                hash_comparison_result = "NOT_COMPARED"
 
     except Exception:
         status = "unable_to_authenticate"
@@ -798,6 +926,18 @@ def process_verification(data, kind, supplied_reference, user, file_name=None, f
         trusted_hash=record.get("file_hash") if record else None,
     )
 
+    # Confirm tampering only when trusted evidence establishes an unauthorized change to protected certificate data
+    if hash_matches is False and record is not None and not record["revoked"] and authorized:
+        has_trusted_evidence = field_comparison.get("commitment_verified") and (
+            field_comparison.get("critical_field_changed")
+            or field_comparison.get("status") in ("CRITICAL_FIELDS_CHANGED", "FIELDS_CHANGED")
+        )
+        if has_trusted_evidence:
+            verification_status = "TAMPERING_DETECTED"
+            category = "POSSIBLE_TAMPERING_OR_FILE_MISMATCH"
+            message = "Protected certificate data differs from the verified issuer reference. Trusted evidence confirms unauthorized changes to certificate fields."
+            hash_comparison = "Uploaded file hash differs from registered on-chain hash (file bytes differ; content changes confirmed by reference evidence)"
+
     # 2. Visual tampering localization
     ref_image_data = None
     if reference and not hash_matches:
@@ -836,7 +976,7 @@ def process_verification(data, kind, supplied_reference, user, file_name=None, f
         analysis.get("fields", {})
     )
 
-    next_action = CATEGORY_ACTIONS.get(category, "Review the result details and consult the issuing institution.")
+    next_action = CATEGORY_ACTIONS.get(verification_status, CATEGORY_ACTIONS.get(category, "Review the result details and consult the issuing institution."))
 
     calculated_size = file_size if file_size is not None else (len(data) if data is not None else None)
 
@@ -855,7 +995,7 @@ def process_verification(data, kind, supplied_reference, user, file_name=None, f
         )
         check_id = cursor.lastrowid
 
-    reason = message if verification_status in ("NOT_REGISTERED", "INCONCLUSIVE", "VERIFICATION_UNAVAILABLE", "TAMPERING_DETECTED", "ISSUER_NOT_AUTHORIZED") else None
+    reason = message if verification_status in ("NOT_REGISTERED", "INCONCLUSIVE", "VERIFICATION_UNAVAILABLE", "TAMPERING_DETECTED", "POSSIBLE_TAMPERING_OR_FILE_MISMATCH", "ISSUER_NOT_AUTHORIZED", "EXPIRED") else None
 
     report_url = f"/api/verifications/{check_id}/report.pdf"
 

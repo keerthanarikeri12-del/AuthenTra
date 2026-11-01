@@ -164,7 +164,7 @@ def snapshot(job, user):
     if row['mode'] == 'verify':
         res['verification_summary'] = {
             'verified': sum(1 for i in items if (i.get('result') and (i['result'].get('verification_status') == 'VERIFIED' or i['result'].get('category') == 'VERIFIED' or i['result'].get('status') == 'verified'))),
-            'mismatched': sum(1 for i in items if (i.get('result') and (i['result'].get('verification_status') == 'TAMPERING_DETECTED' or i['result'].get('category') in ('POSSIBLE_TAMPERING_OR_FILE_MISMATCH', 'TAMPERING_DETECTED') or i['result'].get('status') in ('possible_tampering', 'TAMPERING_DETECTED')))),
+            'mismatched': sum(1 for i in items if (i.get('result') and (i['result'].get('verification_status') in ('TAMPERING_DETECTED', 'POSSIBLE_TAMPERING_OR_FILE_MISMATCH') or i['result'].get('category') in ('POSSIBLE_TAMPERING_OR_FILE_MISMATCH', 'TAMPERING_DETECTED') or i['result'].get('status') in ('possible_tampering', 'tampering_detected', 'TAMPERING_DETECTED')))),
             'unregistered': sum(1 for i in items if (i.get('result') and (i['result'].get('verification_status') in ('NOT_REGISTERED', 'INCONCLUSIVE') or i['result'].get('category') in ('NOT_REGISTERED_OR_INCONCLUSIVE', 'NOT_REGISTERED', 'INCONCLUSIVE') or i['result'].get('status') in ('not_registered', 'inconclusive', 'NOT_REGISTERED', 'INCONCLUSIVE')))),
             'revoked': sum(1 for i in items if (i.get('result') and (i['result'].get('verification_status') == 'REVOKED' or i['result'].get('category') == 'REVOKED' or i['result'].get('status') in ('revoked', 'REVOKED')))),
             'issuer_not_authorized': sum(1 for i in items if (i.get('result') and (i['result'].get('verification_status') == 'ISSUER_NOT_AUTHORIZED' or i['result'].get('category') == 'ISSUER_NOT_AUTHORIZED' or i['result'].get('status') in ('not_verified', 'ISSUER_NOT_AUTHORIZED')))),
@@ -458,12 +458,13 @@ def start_worker(verify, register):
                 ta_json = json.dumps(result["transformation_analysis"]) if (isinstance(result, dict) and result.get("transformation_analysis")) else None
                 rr_json = json.dumps(result["review_routing"]) if (isinstance(result, dict) and result.get("review_routing")) else None
                 with connect() as conn:
+                    new_ref = result.get('reference') if (isinstance(result, dict) and result.get('reference')) else item['reference']
                     if status in ('REGISTRATION_STATUS_UNCERTAIN', 'AWAITING_REVIEW'):
-                        conn.execute('UPDATE upload_items SET state=?,status=?,result=?,field_analysis=?,visual_tampering=?,transformation_analysis=?,review_routing=? WHERE id=?',
-                                     (state, status, json.dumps(result), fa_json, vt_json, ta_json, rr_json, item['id']))
+                        conn.execute('UPDATE upload_items SET reference=?,state=?,status=?,result=?,field_analysis=?,visual_tampering=?,transformation_analysis=?,review_routing=? WHERE id=?',
+                                     (new_ref, state, status, json.dumps(result), fa_json, vt_json, ta_json, rr_json, item['id']))
                     else:
-                        conn.execute('UPDATE upload_items SET state=?,status=?,result=?,field_analysis=?,visual_tampering=?,transformation_analysis=?,review_routing=?,data=NULL WHERE id=?',
-                                     (state, status, json.dumps(result), fa_json, vt_json, ta_json, rr_json, item['id']))
+                        conn.execute('UPDATE upload_items SET reference=?,state=?,status=?,result=?,field_analysis=?,visual_tampering=?,transformation_analysis=?,review_routing=?,data=NULL WHERE id=?',
+                                     (new_ref, state, status, json.dumps(result), fa_json, vt_json, ta_json, rr_json, item['id']))
                     conn.execute("UPDATE upload_jobs SET state='completed' WHERE id=? AND NOT EXISTS(SELECT 1 FROM upload_items WHERE job_id=? AND state IN ('pending','processing','awaiting_review'))", (item['job_id'], item['job_id']))
             except Exception:
                 logging.exception('Upload worker error')

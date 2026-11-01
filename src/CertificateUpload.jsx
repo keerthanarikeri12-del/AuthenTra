@@ -21,6 +21,7 @@ const stageLabels = {
   INCONCLUSIVE: 'Inconclusive',
   NOT_REGISTERED_OR_INCONCLUSIVE: 'Not Registered or Inconclusive',
   REVOKED: 'Revoked',
+  EXPIRED: 'Expired',
   ISSUER_NOT_AUTHORIZED: 'Issuer Not Authorized',
   VERIFICATION_UNAVAILABLE: 'Verification Unavailable',
   INVALID_FILE: 'Invalid File',
@@ -90,7 +91,7 @@ function getBadgeStatus(item, issuing) {
   const stat = item.result?.status;
   if (cat === 'VERIFIED' || stat === 'verified') return 'verified';
   if (cat === 'TAMPERING_DETECTED' || cat === 'POSSIBLE_TAMPERING_OR_FILE_MISMATCH' || stat === 'possible_tampering') return 'possible_tampering';
-  if (cat === 'REVOKED' || stat === 'revoked') return 'revoked';
+  if (cat === 'REVOKED' || stat === 'revoked' || cat === 'EXPIRED' || stat === 'expired') return 'revoked';
   if (cat === 'ISSUER_NOT_AUTHORIZED' || stat === 'not_verified') return 'not_verified';
   if (cat === 'INVALID_FILE' || stat === 'invalid_file' || item.state === 'rejected') return 'not_verified';
   if (cat === 'VERIFICATION_UNAVAILABLE' || stat === 'unable_to_authenticate' || item.state === 'failed') return 'unable_to_authenticate';

@@ -24,9 +24,9 @@ function getCanonicalRole(role) {
 const labels = {
   verified: 'Verified',
   VERIFIED: 'Verified',
-  possible_tampering: 'Possible Tampering',
-  tampering_detected: 'Possible Tampering or File Mismatch',
-  TAMPERING_DETECTED: 'Possible Tampering or File Mismatch',
+  possible_tampering: 'Possible Tampering or File Mismatch',
+  tampering_detected: 'Tampering Detected',
+  TAMPERING_DETECTED: 'Tampering Detected',
   POSSIBLE_TAMPERING_OR_FILE_MISMATCH: 'Possible Tampering or File Mismatch',
   not_registered: 'Not Registered',
   NOT_REGISTERED: 'Not Registered',
@@ -35,6 +35,8 @@ const labels = {
   NOT_REGISTERED_OR_INCONCLUSIVE: 'Not Registered or Inconclusive',
   revoked: 'Revoked',
   REVOKED: 'Revoked',
+  expired: 'Expired',
+  EXPIRED: 'Expired',
   not_verified: 'Issuer Not Authorized',
   ISSUER_NOT_AUTHORIZED: 'Issuer Not Authorized',
   unable_to_authenticate: 'Verification Unavailable',
@@ -829,14 +831,14 @@ function HashVisualDiff({ fileHash, registeredHash, isMatch, isMismatch }) {
       {hasReg && diffCount === 0 && (
         <div style={{padding: '10px 12px', background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: '6px', marginBottom: '12px', color: '#065f46', fontSize: '12px', lineHeight: 1.5}}>
           <strong style={{display: 'block', marginBottom: '2px'}}>✓ Complete Cryptographic Match (64 / 64 Characters)</strong>
-          The cryptographic SHA-256 digest of your uploaded file is completely identical to the on-chain registered record. Every byte and visual pixel is verified authentic and unaltered.
+          The cryptographic SHA-256 digest of your uploaded file matches the on-chain registered record. The uploaded file bytes are identical to the registered document bytes.
         </div>
       )}
 
       {hasReg && diffCount > 0 && (
         <div style={{padding: '10px 12px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '6px', marginBottom: '12px', color: '#991b1b', fontSize: '12px', lineHeight: 1.5}}>
-          <strong style={{display: 'block', marginBottom: '2px'}}>⚠ Cryptographic Hash Mismatch: {diffCount} Hex Characters Differ</strong>
-          Because SHA-256 has the avalanche effect, modifying even a single character, grade, or pixel completely scrambles the output hash. Red-highlighted characters below indicate the exact points of divergence between the uploaded file and the immutable blockchain record.
+          <strong style={{display: 'block', marginBottom: '2px'}}>⚠ Cryptographic File Hash Mismatch: {diffCount} of 64 Digest Characters Differ</strong>
+          The cryptographic SHA-256 hash of the uploaded file differs from the registered blockchain hash. A hash mismatch proves only that the file bytes differ (e.g., from re-saving, PDF re-exporting, compression, scanning, or content edits). Due to the avalanche effect of cryptographic hashing, differing digest characters reflect output differences between the two hashes, not the location or nature of changes in the document.
         </div>
       )}
 
@@ -864,7 +866,7 @@ function HashVisualDiff({ fileHash, registeredHash, isMatch, isMismatch }) {
                 <div style={{display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: '#64748b', marginBottom: '4px'}}>
                   <span>Chars {cIdx * 8 + 1}–{cIdx * 8 + 8}</span>
                   <span style={{color: chunkHasDiff ? '#dc2626' : '#15803d', fontWeight: 600}}>
-                    {chunkHasDiff ? '✕ Divergence' : '✓ Matched'}
+                    {chunkHasDiff ? '✕ Differing Digest Characters' : '✓ Matched'}
                   </span>
                 </div>
                 <div style={{display: 'flex', flexDirection: 'column', gap: '4px'}}>
@@ -992,7 +994,7 @@ function HashVisualDiff({ fileHash, registeredHash, isMatch, isMismatch }) {
       )}
 
       <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '10px', color: '#94a3b8', marginTop: '6px'}}>
-        <span>Green = Matched character · Red = Tampered / altered character</span>
+        <span>Green = Matched character · Red = Differing digest character</span>
         <span>SHA-256 Digest: 256 bits (64 hex characters)</span>
       </div>
     </div>
@@ -1712,8 +1714,8 @@ function Result({result: r, autoScroll = true, user, preview}) {
     ['issuer_approved', 'Issuer approved by platform'],
     ['hash_matches', 'Original file matches registered record']
   ];
-  const category = r.verification_status || r.category || (r.status === 'verified' ? 'VERIFIED' : (r.status === 'possible_tampering' || r.status === 'tampering_detected') ? 'TAMPERING_DETECTED' : r.status === 'revoked' ? 'REVOKED' : r.status === 'not_verified' ? 'ISSUER_NOT_AUTHORIZED' : r.status === 'unable_to_authenticate' ? 'VERIFICATION_UNAVAILABLE' : r.status === 'invalid_file' ? 'INVALID_FILE' : 'NOT_REGISTERED_OR_INCONCLUSIVE');
-  const badgeClass = category === 'VERIFIED' ? 'verified' : (category === 'TAMPERING_DETECTED' || category === 'POSSIBLE_TAMPERING_OR_FILE_MISMATCH') ? 'possible_tampering' : (category === 'REVOKED' || category === 'ISSUER_NOT_AUTHORIZED') ? 'revoked' : category === 'INVALID_FILE' ? 'not_verified' : category === 'VERIFICATION_UNAVAILABLE' ? 'unable_to_authenticate' : 'inconclusive';
+  const category = r.verification_status || r.category || (r.status === 'verified' ? 'VERIFIED' : (r.status === 'possible_tampering' ? 'POSSIBLE_TAMPERING_OR_FILE_MISMATCH' : r.status === 'tampering_detected' ? 'TAMPERING_DETECTED' : r.status === 'revoked' ? 'REVOKED' : r.status === 'expired' ? 'EXPIRED' : r.status === 'not_verified' ? 'ISSUER_NOT_AUTHORIZED' : r.status === 'unable_to_authenticate' ? 'VERIFICATION_UNAVAILABLE' : r.status === 'invalid_file' ? 'INVALID_FILE' : 'NOT_REGISTERED_OR_INCONCLUSIVE'));
+  const badgeClass = category === 'VERIFIED' ? 'verified' : (category === 'TAMPERING_DETECTED' || category === 'POSSIBLE_TAMPERING_OR_FILE_MISMATCH') ? 'possible_tampering' : (category === 'REVOKED' || category === 'EXPIRED' || category === 'ISSUER_NOT_AUTHORIZED') ? 'revoked' : category === 'INVALID_FILE' ? 'not_verified' : category === 'VERIFICATION_UNAVAILABLE' ? 'unable_to_authenticate' : 'inconclusive';
   const isHashMatch = r.hash_matches === true;
   const isHashMismatch = r.hash_matches === false;
   const canDownload = isUserRole(user);
@@ -1725,10 +1727,10 @@ function Result({result: r, autoScroll = true, user, preview}) {
         <div style={{flex: 1}}>
           <div style={{display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginBottom: '6px'}}>
             <span className="eyebrow">VERIFICATION RESULT</span>
-            <Badge status={badgeClass}>{(r.status === 'possible_tampering' || category === 'TAMPERING_DETECTED' || category === 'POSSIBLE_TAMPERING_OR_FILE_MISMATCH') ? 'Possible Tampering or File Mismatch' : (r.label || labels[category] || category)}</Badge>
+            <Badge status={badgeClass}>{(category === 'POSSIBLE_TAMPERING_OR_FILE_MISMATCH' || r.status === 'possible_tampering') ? 'Possible Tampering or File Mismatch' : (category === 'TAMPERING_DETECTED' || r.status === 'tampering_detected') ? 'Tampering Detected' : (r.label || labels[category] || category)}</Badge>
             {r.reference && <span className="reference-pill mono" style={{background: 'var(--line,#e5ebed)', padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 600}}>ID: {r.reference}</span>}
           </div>
-          <h2>{(r.status === 'possible_tampering' || category === 'TAMPERING_DETECTED' || category === 'POSSIBLE_TAMPERING_OR_FILE_MISMATCH') ? 'Possible Tampering or File Mismatch' : (r.label || labels[category] || category)}</h2>
+          <h2>{(category === 'POSSIBLE_TAMPERING_OR_FILE_MISMATCH' || r.status === 'possible_tampering') ? 'Possible Tampering or File Mismatch' : (category === 'TAMPERING_DETECTED' || r.status === 'tampering_detected') ? 'Tampering Detected' : (r.label || labels[category] || category)}</h2>
           <p className="result-explanation" style={{marginTop: '4px', fontSize: '13px', lineHeight: 1.6}}>{r.message}</p>
         </div>
         <div style={{display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap'}}>
@@ -1767,11 +1769,11 @@ function Result({result: r, autoScroll = true, user, preview}) {
           <div style={{display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px'}}>
             {isHashMatch ? <Check size={16} color="#087d6a"/> : isHashMismatch ? <X size={16} color="#dc2626"/> : <span>—</span>}
             <strong style={{fontSize: '12px', color: isHashMatch ? '#087d6a' : isHashMismatch ? '#dc2626' : 'inherit'}}>
-              {isHashMatch ? 'Exact Match (64/64)' : isHashMismatch ? 'Hash Mismatch (Altered)' : 'Not Compared'}
+              {isHashMatch ? 'Exact Match (64/64)' : isHashMismatch ? 'Hash Mismatch (File Bytes Differ)' : 'Not Compared'}
             </strong>
           </div>
           <p style={{fontSize: '11px', color: '#6b7280', margin: '4px 0 0'}}>
-            {isHashMatch ? 'Uploaded file byte hash matches on-chain registered record.' : isHashMismatch ? 'File hash differs from blockchain record.' : (r.hash_comparison || 'No hash comparison.')}
+            {isHashMatch ? 'Uploaded file byte hash matches on-chain registered record.' : isHashMismatch ? 'Uploaded file bytes differ from the registered blockchain record.' : (r.hash_comparison || 'No hash comparison.')}
           </p>
         </div>
 

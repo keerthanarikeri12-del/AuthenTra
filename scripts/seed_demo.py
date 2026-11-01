@@ -11,6 +11,7 @@ import pypdfium2 as pdfium
 from backend.storage import initialize, seed_demo, connect, ROOT
 from backend.main import _persist_reference_preview
 from backend.fields import canonical_metadata_dict, compute_metadata_commitment, FIELD_SCHEMA_VERSION
+from backend.registry import Registry
 
 def prepare_demo():
     samples = ROOT / "samples"
@@ -53,34 +54,36 @@ def prepare_demo():
         print(f"Blockchain registry unavailable for demo seeding: {exc}")
 
     with connect() as conn:
-        issuer = dict(conn.execute("SELECT * FROM users WHERE email='issuer@authentra.demo'").fetchone())
-    for filename, reference in [('original.pdf','AT-2026-0001'),('revoked.pdf','AT-2026-0002')]:
-        data_bytes = (samples / filename).read_bytes()
-        _persist_reference_preview(data_bytes, 'pdf', reference, issuer['id'])
-        meta = {
-            "recipient_name": "Alex Morgan",
-            "institution_name": "Meridian Institute of Technology",
-            "course": "Blockchain Fundamentals",
-            "certificate_reference": reference,
-            "issue_date": "2025-06-12",
-            "grade": None,
-            "venue": None,
-        }
-        canon = canonical_metadata_dict(meta)
-        meta_json = json.dumps(canon)
-        comm = compute_metadata_commitment(meta, reference, hashlib.sha256(data_bytes).hexdigest().lower())
-        with connect() as conn:
-            conn.execute(
-                "UPDATE registrations SET confirmed_metadata=?, metadata_commitment=?, metadata_schema_version=? WHERE reference=?",
-                (meta_json, comm, FIELD_SCHEMA_VERSION, reference)
-            )
-            if chain:
-                try:
-                    if chain.lookup(reference) is None:
-                        from backend.main import register_document
-                        register_document(data_bytes, 'pdf', reference, issuer)
-                except Exception:
-                    pass
+        issuer_row = conn.execute("SELECT * FROM users WHERE email='issuer@authentra.demo'").fetchone()
+        issuer = dict(issuer_row) if issuer_row else {}
+    if issuer.get("id"):
+        for filename, reference in [('original.pdf','AT-2026-0001'),('revoked.pdf','AT-2026-0002')]:
+            data_bytes = (samples / filename).read_bytes()
+            _persist_reference_preview(data_bytes, 'pdf', reference, issuer['id'])
+            meta = {
+                "recipient_name": "Alex Morgan",
+                "institution_name": "Meridian Institute of Technology",
+                "course": "Blockchain Fundamentals",
+                "certificate_reference": reference,
+                "issue_date": "2025-06-12",
+                "grade": None,
+                "venue": None,
+            }
+            canon = canonical_metadata_dict(meta)
+            meta_json = json.dumps(canon)
+            comm = compute_metadata_commitment(meta, reference, hashlib.sha256(data_bytes).hexdigest().lower())
+            with connect() as conn:
+                conn.execute(
+                    "UPDATE registrations SET confirmed_metadata=?, metadata_commitment=?, metadata_schema_version=? WHERE reference=?",
+                    (meta_json, comm, FIELD_SCHEMA_VERSION, reference)
+                )
+                if chain:
+                    try:
+                        if chain.lookup(reference) is None:
+                            from backend.main import register_document
+                            register_document(data_bytes, 'pdf', reference, issuer)
+                    except Exception:
+                        pass
 
     if chain:
         try:
