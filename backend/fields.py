@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional, Tuple
 
 FIELD_SCHEMA_VERSION = "2026.1"
 
-CRITICAL_FIELDS = ["recipient_name", "certificate_reference", "course", "issue_date", "grade"]
+CRITICAL_FIELDS = ["recipient_name", "certificate_reference", "course", "institution_name", "issue_date", "grade"]
 ALL_FIELDS = ["recipient_name", "institution_name", "course", "certificate_reference", "issue_date", "grade", "venue"]
 
 FIELD_ALIASES = {
@@ -22,6 +22,10 @@ FIELD_ALIASES = {
     "programme": "course",
     "program": "course",
     "degree": "course",
+    "award": "course",
+    "award_title": "course",
+    "title": "course",
+    "certificate_title": "course",
     "reference": "certificate_reference",
     "certificate_reference": "certificate_reference",
     "certificate_id": "certificate_reference",
@@ -31,6 +35,7 @@ FIELD_ALIASES = {
     "grade": "grade",
     "result": "grade",
     "classification": "grade",
+    "marks": "grade",
     "gpa": "grade",
     "venue": "venue",
     "location": "venue",
@@ -357,21 +362,25 @@ def compare_fields(registered_record: Optional[Dict[str, Any]], extracted_fields
         expected = compute_metadata_commitment(confirmed, reference, file_hash)
         commitment_verified = (expected.lower() == commitment_stored.lower())
 
-    signature_verified = False
-    if trusted_issuer is not None:
+    issuer_sig = registered_record.get("issuer_signature")
+    if issuer_sig and trusted_issuer is not None:
         try:
             from eth_account import Account
             from eth_account.messages import encode_defunct
             signer = Account.recover_message(
                 encode_defunct(hexstr=commitment_stored),
-                signature=registered_record.get("issuer_signature"),
+                signature=issuer_sig,
             )
-            signature_verified = signer.lower() == trusted_issuer.lower()
+            signature_verified = (signer.lower() == trusted_issuer.lower())
             commitment_verified = commitment_verified and signature_verified and (
                 file_hash.lower().removeprefix("0x") == (trusted_hash or "").lower().removeprefix("0x")
             )
         except Exception:
             commitment_verified = False
+    elif not issuer_sig and trusted_hash:
+        commitment_verified = commitment_verified and (
+            file_hash.lower().removeprefix("0x") == trusted_hash.lower().removeprefix("0x")
+        )
 
     if not commitment_verified:
         fb_fields = _fallback_observed_fields(extracted_fields, extraction_method)

@@ -89,8 +89,10 @@ function getBadgeStatus(item, issuing) {
   }
   const cat = item.result?.verification_status || item.result?.category;
   const stat = item.result?.status;
-  if (cat === 'VERIFIED' || stat === 'verified') return 'verified';
-  if (cat === 'TAMPERING_DETECTED' || cat === 'POSSIBLE_TAMPERING_OR_FILE_MISMATCH' || stat === 'possible_tampering') return 'possible_tampering';
+  if (cat === 'VERIFIED' || stat === 'verified' || cat === 'GENUINE') return 'verified';
+  if (cat === 'TAMPERING_DETECTED' || stat === 'tampering_detected' || cat === 'TAMPERED') return 'tampered';
+  if (cat === 'POSSIBLE_TAMPERING_OR_FILE_MISMATCH' || stat === 'possible_tampering') return 'possible_tampering';
+  if (cat === 'MANUAL_REVIEW_REQUIRED' || stat === 'manual_review_required') return 'manual_review';
   if (cat === 'REVOKED' || stat === 'revoked' || cat === 'EXPIRED' || stat === 'expired') return 'revoked';
   if (cat === 'ISSUER_NOT_AUTHORIZED' || stat === 'not_verified') return 'not_verified';
   if (cat === 'INVALID_FILE' || stat === 'invalid_file' || item.state === 'rejected') return 'not_verified';

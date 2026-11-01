@@ -24,12 +24,18 @@ function getCanonicalRole(role) {
 const labels = {
   verified: 'Verified',
   VERIFIED: 'Verified',
-  possible_tampering: 'Possible Tampering or File Mismatch',
+  genuine: 'Genuine',
+  GENUINE: 'Genuine',
+  possible_tampering: 'File Integrity Mismatch (Content Unchanged)',
+  POSSIBLE_TAMPERING_OR_FILE_MISMATCH: 'File Integrity Mismatch (Content Unchanged)',
   tampering_detected: 'Tampering Detected',
   TAMPERING_DETECTED: 'Tampering Detected',
-  POSSIBLE_TAMPERING_OR_FILE_MISMATCH: 'Possible Tampering or File Mismatch',
-  not_registered: 'Not Registered',
-  NOT_REGISTERED: 'Not Registered',
+  tampered: 'Tampered',
+  TAMPERED: 'Tampered',
+  not_registered: 'Unregistered / Not Verified',
+  NOT_REGISTERED: 'Unregistered / Not Verified',
+  manual_review_required: 'Manual Review Required',
+  MANUAL_REVIEW_REQUIRED: 'Manual Review Required',
   inconclusive: 'Inconclusive',
   INCONCLUSIVE: 'Inconclusive',
   NOT_REGISTERED_OR_INCONCLUSIVE: 'Not Registered or Inconclusive',
@@ -77,7 +83,27 @@ async function api(path, options = {}) {
   return value;
 }
 
-const fmtTime = value => value ? new Date(value.replace(' ', 'T') + (value.endsWith('Z') ? '' : 'Z')).toLocaleString(undefined, {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'}) : '—';
+const fmtTime = value => {
+  if (!value) return '—';
+  try {
+    let s = String(value).trim();
+    let d = new Date(s);
+    if (!isNaN(d.getTime())) {
+      return d.toLocaleString(undefined, {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'});
+    }
+    s = s.replace(' ', 'T');
+    if (!s.includes('Z') && !/[+-]\d{2}:?\d{2}$/.test(s)) {
+      s += 'Z';
+    }
+    d = new Date(s);
+    if (!isNaN(d.getTime())) {
+      return d.toLocaleString(undefined, {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'});
+    }
+    return String(value);
+  } catch (e) {
+    return String(value);
+  }
+};
 
 function saveFile(name, content, type = 'application/json') {
   const url = URL.createObjectURL(new Blob([content], {type}));
@@ -90,9 +116,11 @@ function saveFile(name, content, type = 'application/json') {
 
 function Badge({status, children}) {
   const norm = (status || '').toLowerCase();
-  const cls = norm === 'verified' ? 'verified' :
-              norm.includes('tampering') || norm.includes('mismatch') ? 'possible_tampering' :
-              norm.includes('revoked') ? 'revoked' :
+  const cls = norm === 'verified' || norm === 'genuine' ? 'verified' :
+              norm.includes('tamper') ? 'tampered' :
+              norm.includes('mismatch') || norm.includes('possible_tampering') ? 'possible_tampering' :
+              norm.includes('manual') ? 'manual_review' :
+              norm.includes('revoked') || norm.includes('expired') ? 'revoked' :
               norm.includes('not_authorized') || norm.includes('not_verified') || norm.includes('invalid') ? 'not_verified' :
               norm.includes('unavailable') || norm.includes('unable') ? 'unable_to_authenticate' :
               norm.includes('registered') || norm.includes('inconclusive') ? 'inconclusive' : norm;
@@ -1714,8 +1742,25 @@ function Result({result: r, autoScroll = true, user, preview}) {
     ['issuer_approved', 'Issuer approved by platform'],
     ['hash_matches', 'Original file matches registered record']
   ];
-  const category = r.verification_status || r.category || (r.status === 'verified' ? 'VERIFIED' : (r.status === 'possible_tampering' ? 'POSSIBLE_TAMPERING_OR_FILE_MISMATCH' : r.status === 'tampering_detected' ? 'TAMPERING_DETECTED' : r.status === 'revoked' ? 'REVOKED' : r.status === 'expired' ? 'EXPIRED' : r.status === 'not_verified' ? 'ISSUER_NOT_AUTHORIZED' : r.status === 'unable_to_authenticate' ? 'VERIFICATION_UNAVAILABLE' : r.status === 'invalid_file' ? 'INVALID_FILE' : 'NOT_REGISTERED_OR_INCONCLUSIVE'));
-  const badgeClass = category === 'VERIFIED' ? 'verified' : (category === 'TAMPERING_DETECTED' || category === 'POSSIBLE_TAMPERING_OR_FILE_MISMATCH') ? 'possible_tampering' : (category === 'REVOKED' || category === 'EXPIRED' || category === 'ISSUER_NOT_AUTHORIZED') ? 'revoked' : category === 'INVALID_FILE' ? 'not_verified' : category === 'VERIFICATION_UNAVAILABLE' ? 'unable_to_authenticate' : 'inconclusive';
+  const category = r.verification_status || r.category || (
+    r.status === 'verified' ? 'VERIFIED' :
+    r.status === 'tampering_detected' ? 'TAMPERING_DETECTED' :
+    r.status === 'possible_tampering' ? 'POSSIBLE_TAMPERING_OR_FILE_MISMATCH' :
+    r.status === 'manual_review_required' ? 'MANUAL_REVIEW_REQUIRED' :
+    r.status === 'not_registered' ? 'NOT_REGISTERED' :
+    r.status === 'revoked' ? 'REVOKED' :
+    r.status === 'expired' ? 'EXPIRED' :
+    r.status === 'not_verified' ? 'ISSUER_NOT_AUTHORIZED' :
+    r.status === 'unable_to_authenticate' ? 'VERIFICATION_UNAVAILABLE' :
+    r.status === 'invalid_file' ? 'INVALID_FILE' : 'INCONCLUSIVE'
+  );
+  const badgeClass = (category === 'VERIFIED' || category === 'GENUINE') ? 'verified' :
+                     (category === 'TAMPERING_DETECTED' || category === 'TAMPERED') ? 'tampered' :
+                     category === 'POSSIBLE_TAMPERING_OR_FILE_MISMATCH' ? 'possible_tampering' :
+                     category === 'MANUAL_REVIEW_REQUIRED' ? 'manual_review' :
+                     (category === 'REVOKED' || category === 'EXPIRED') ? 'revoked' :
+                     (category === 'ISSUER_NOT_AUTHORIZED' || category === 'INVALID_FILE') ? 'not_verified' :
+                     category === 'VERIFICATION_UNAVAILABLE' ? 'unable_to_authenticate' : 'inconclusive';
   const isHashMatch = r.hash_matches === true;
   const isHashMismatch = r.hash_matches === false;
   const canDownload = isUserRole(user);
@@ -1727,10 +1772,10 @@ function Result({result: r, autoScroll = true, user, preview}) {
         <div style={{flex: 1}}>
           <div style={{display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginBottom: '6px'}}>
             <span className="eyebrow">VERIFICATION RESULT</span>
-            <Badge status={badgeClass}>{(category === 'POSSIBLE_TAMPERING_OR_FILE_MISMATCH' || r.status === 'possible_tampering') ? 'Possible Tampering or File Mismatch' : (category === 'TAMPERING_DETECTED' || r.status === 'tampering_detected') ? 'Tampering Detected' : (r.label || labels[category] || category)}</Badge>
+            <Badge status={badgeClass}>{(category === 'POSSIBLE_TAMPERING_OR_FILE_MISMATCH' || r.status === 'possible_tampering') ? 'File Integrity Mismatch (Content Unchanged)' : (category === 'TAMPERING_DETECTED' || r.status === 'tampering_detected') ? 'Tampering Detected' : (r.label || labels[category] || category)}</Badge>
             {r.reference && <span className="reference-pill mono" style={{background: 'var(--line,#e5ebed)', padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 600}}>ID: {r.reference}</span>}
           </div>
-          <h2>{(category === 'POSSIBLE_TAMPERING_OR_FILE_MISMATCH' || r.status === 'possible_tampering') ? 'Possible Tampering or File Mismatch' : (category === 'TAMPERING_DETECTED' || r.status === 'tampering_detected') ? 'Tampering Detected' : (r.label || labels[category] || category)}</h2>
+          <h2>{(category === 'POSSIBLE_TAMPERING_OR_FILE_MISMATCH' || r.status === 'possible_tampering') ? 'File Integrity Mismatch (Content Unchanged)' : (category === 'TAMPERING_DETECTED' || r.status === 'tampering_detected') ? 'Tampering Detected' : (r.label || labels[category] || category)}</h2>
           <p className="result-explanation" style={{marginTop: '4px', fontSize: '13px', lineHeight: 1.6}}>{r.message}</p>
         </div>
         <div style={{display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap'}}>
@@ -1764,6 +1809,18 @@ function Result({result: r, autoScroll = true, user, preview}) {
       )}
 
       <div className="evidence-summary-grid" style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '10px', margin: '14px 0'}}>
+        <div className="evidence-card" style={{background: '#fff', border: '1px solid var(--line,#e5ebed)', borderRadius: '7px', padding: '10px 12px'}}>
+          <small style={{display: 'block', color: 'var(--muted,#7b8b90)', fontWeight: 600, textTransform: 'uppercase', fontSize: '10px'}}>Certificate Identification</small>
+          <strong style={{display: 'block', fontSize: '12px', marginTop: '4px'}}>
+            {r.matching_status_label || (r.matching_status === 'AUTOMATIC_METADATA_MATCH' ? 'Automatically Matched by Details' : r.matching_status === 'EXACT_HASH_MATCH' ? 'Matched by Exact Hash' : r.matching_status === 'SUPPLIED_REFERENCE' ? 'Matched by Supplied ID' : r.matching_status === 'MULTIPLE_MATCHES' ? 'Multiple Matches Found' : r.reference ? `Identified as ${r.reference}` : 'No Record Matched')}
+          </strong>
+          {r.original_reference && (
+            <small style={{color: '#6b7280', fontSize: '11px', display: 'block', marginTop: '2px'}}>
+              Original Ref: <span className="mono" style={{fontWeight: 600}}>{r.original_reference}</span>
+            </small>
+          )}
+        </div>
+
         <div className="evidence-card" style={{background: '#fff', border: '1px solid var(--line,#e5ebed)', borderRadius: '7px', padding: '10px 12px'}}>
           <small style={{display: 'block', color: 'var(--muted,#7b8b90)', fontWeight: 600, textTransform: 'uppercase', fontSize: '10px'}}>Hash Comparison</small>
           <div style={{display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px'}}>
@@ -1815,6 +1872,41 @@ function Result({result: r, autoScroll = true, user, preview}) {
           </div>
         ))}
       </div>
+
+      {r.modified_fields && r.modified_fields.length > 0 && (
+        <div className="modified-fields-card" style={{margin: '14px 0', padding: '12px 14px', borderRadius: '7px', background: '#fef2f2', border: '1px solid #fecaca', borderLeft: '4px solid #dc2626'}}>
+          <div style={{display: 'flex', alignItems: 'center', gap: '8px', color: '#991b1b', marginBottom: '8px'}}>
+            <AlertTriangle size={18}/>
+            <strong style={{fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.5px'}}>
+              Detected Discrepancies & Modified Fields ({r.modified_fields.length})
+            </strong>
+          </div>
+          <div style={{overflowX: 'auto'}}>
+            <table style={{width: '100%', borderCollapse: 'collapse', fontSize: '12px'}}>
+              <thead>
+                <tr style={{textAlign: 'left', borderBottom: '1px solid #fca5a5', color: '#7f1d1d'}}>
+                  <th style={{padding: '6px 8px'}}>Modified Field</th>
+                  <th style={{padding: '6px 8px'}}>Original Registered Value</th>
+                  <th style={{padding: '6px 8px'}}>Uploaded Certificate Value</th>
+                  <th style={{padding: '6px 8px'}}>Hash Comparison</th>
+                  <th style={{padding: '6px 8px'}}>Reason</th>
+                </tr>
+              </thead>
+              <tbody>
+                {r.modified_fields.map((mf, idx) => (
+                  <tr key={idx} style={{borderBottom: '1px solid #fee2e2'}}>
+                    <td style={{padding: '6px 8px', fontWeight: 600, color: '#991b1b'}}>{mf.label || mf.field}</td>
+                    <td style={{padding: '6px 8px', color: '#065f46', background: '#f0fdf4'}}>{mf.original_value || 'None'}</td>
+                    <td style={{padding: '6px 8px', color: '#991b1b', background: '#fff1f2'}}>{mf.uploaded_value || 'None'}</td>
+                    <td style={{padding: '6px 8px'}}><code style={{fontSize: '10px'}}>{mf.hash_comparison || r.hash_comparison_result || 'MISMATCH'}</code></td>
+                    <td style={{padding: '6px 8px', color: '#4b5563'}}>{mf.reason}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {r.field_analysis && <FieldComparisonView fa={r.field_analysis}/>}
       {r.visual_tampering && <VisualTamperingView vt={r.visual_tampering} preview={preview || r.preview}/>}

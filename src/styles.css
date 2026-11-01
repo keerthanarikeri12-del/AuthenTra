@@ -376,13 +376,13 @@ label small {
   border-color: var(--green-border);
 }
 
-.badge.possible_tampering, .badge.inconclusive, .badge.uncertain {
+.badge.possible_tampering, .badge.inconclusive, .badge.uncertain, .badge.manual_review {
   background: #FEF8ED;
   color: #8C5A08;
   border-color: #F8DFB4;
 }
 
-.badge.revoked, .badge.not_verified {
+.badge.revoked, .badge.not_verified, .badge.tampered {
   background: var(--crimson-light);
   color: var(--crimson-red);
   border-color: var(--crimson-border);
